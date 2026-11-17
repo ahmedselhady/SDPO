@@ -400,7 +400,17 @@ class RayPPOTrainer:
             )
         self.train_dataset, self.val_dataset = train_dataset, val_dataset
 
-        if train_sampler is None:
+        grouped_batch_sampler = None
+        if self.config.data.get("parallel_group_batching", {}).get("enabled", False):
+            if train_sampler is not None:
+                raise ValueError("parallel_group_batching cannot be combined with a custom train_sampler")
+            configured_sampler = self.config.data.get("sampler")
+            if configured_sampler and configured_sampler.get("class_path"):
+                raise ValueError("parallel_group_batching cannot be combined with data.sampler")
+            from verl.experimental.dataset.sampler import ParallelGroupBatchSampler
+
+            grouped_batch_sampler = ParallelGroupBatchSampler(self.train_dataset, self.config.data)
+        elif train_sampler is None:
             train_sampler = create_rl_sampler(self.config.data, self.train_dataset)
         if collate_fn is None:
             from verl.utils.dataset.rl_dataset import collate_fn as default_collate_fn
@@ -409,14 +419,20 @@ class RayPPOTrainer:
 
         num_workers = self.config.data["dataloader_num_workers"]
 
-        self.train_dataloader = StatefulDataLoader(
-            dataset=self.train_dataset,
-            batch_size=self.config.data.get("gen_batch_size", self.config.data.train_batch_size),
-            num_workers=num_workers,
-            drop_last=True,
-            collate_fn=collate_fn,
-            sampler=train_sampler,
-        )
+        train_loader_kwargs = {
+            "dataset": self.train_dataset,
+            "num_workers": num_workers,
+            "collate_fn": collate_fn,
+        }
+        if grouped_batch_sampler is not None:
+            train_loader_kwargs["batch_sampler"] = grouped_batch_sampler
+        else:
+            train_loader_kwargs.update(
+                batch_size=self.config.data.get("gen_batch_size", self.config.data.train_batch_size),
+                drop_last=True,
+                sampler=train_sampler,
+            )
+        self.train_dataloader = StatefulDataLoader(**train_loader_kwargs)
 
         val_batch_size = self.config.data.val_batch_size  # Prefer config value if set
         if val_batch_size is None:
@@ -633,9 +649,9 @@ class RayPPOTrainer:
                     feedback_list[i] = raw_feedback[i]
         return feedback_list
 
-    def _collect_solutions_by_uid(self, batch: DataProto, reward_tensor: torch.Tensor, success_reward_threshold: float) -> dict[Any, list[int]]:
+    def _collect_solutions_by_group(self, batch: DataProto, reward_tensor: torch.Tensor, success_reward_threshold: float, group_ids=None) -> dict[Any, list[int]]:
         seq_scores = reward_tensor.sum(dim=-1).detach().cpu().numpy()
-        uids = batch.non_tensor_batch["uid"]
+        uids = group_ids if group_ids is not None else batch.non_tensor_batch["uid"]
         success_by_uid: dict[Any, list[int]] = defaultdict(list)
         for idx, uid in enumerate(uids):
             if seq_scores[idx] >= success_reward_threshold:
@@ -655,6 +671,8 @@ class RayPPOTrainer:
         response_texts: list[str],
         dont_reprompt_on_self_success: bool = False,
         remove_thinking_from_demonstration: bool = False,
+        languages=None,
+        preferred_languages: Optional[list[str]] = None,
     ) -> Optional[str]:
         uid = uids[idx]
         solution_idxs = success_by_uid[uid]
@@ -662,7 +680,23 @@ class RayPPOTrainer:
             solution_idxs = [j for j in solution_idxs if j != idx]
         if len(solution_idxs) == 0:
             return None
-        solution_idx = solution_idxs[0]  # taking the first successful demonstration effectively selects a random one
+        if languages is not None and preferred_languages:
+            def language_matches(language, preferred):
+                language = str(language).strip().lower().replace("_", "-")
+                preferred = str(preferred).strip().lower().replace("_", "-")
+                if language == "english":
+                    language = "en"
+                if preferred == "english":
+                    preferred = "en"
+                return language == preferred or language.startswith(preferred + "-")
+
+            preferred_idxs = [
+                j for preferred in preferred_languages
+                for j in solution_idxs if language_matches(languages[j], preferred)
+            ]
+            if preferred_idxs:
+                solution_idxs = preferred_idxs
+        solution_idx = solution_idxs[0]
         solution_str = response_texts[solution_idx]
         if remove_thinking_from_demonstration:
             solution_str = self._remove_thinking_trace(solution_str)
@@ -687,6 +721,20 @@ class RayPPOTrainer:
         prompt_texts = [msgs[-1]["content"] for msgs in batch.non_tensor_batch["raw_prompt"]]
         batch_size = batch.batch.batch_size[0]
 
+        group_key = self_distillation_cfg.get("solution_group_key", "parallel_id")
+        language_key = self_distillation_cfg.get("solution_language_key", "language")
+        non_tensor_batch = batch.non_tensor_batch
+        group_ids = non_tensor_batch.get(group_key) if group_key else None
+        languages = non_tensor_batch.get(language_key) if language_key else None
+        # Keep ordinary SDPO behavior when parallel-language metadata is absent.
+        if group_ids is None:
+            group_ids = non_tensor_batch["uid"]
+        else:
+            group_ids = [
+                group_id if group_id is not None and str(group_id).strip() else uid
+                for group_id, uid in zip(group_ids, non_tensor_batch["uid"])
+            ]
+
         # Extract feedback if available and include_environment_feedback is enabled
         feedback_list = self._collect_feedback(
             include_environment_feedback=self_distillation_cfg.include_environment_feedback,
@@ -694,15 +742,17 @@ class RayPPOTrainer:
             batch_size=batch_size,
         )
 
-        success_by_uid = self._collect_solutions_by_uid(batch, reward_tensor, success_reward_threshold=self_distillation_cfg.success_reward_threshold)
+        success_by_uid = self._collect_solutions_by_group(batch, reward_tensor, success_reward_threshold=self_distillation_cfg.success_reward_threshold, group_ids=group_ids)
         solution_strs = [
             self._get_solution(
                 i,
                 success_by_uid,
-                batch.non_tensor_batch["uid"],
+                group_ids,
                 response_texts,
                 self_distillation_cfg.dont_reprompt_on_self_success,
                 self_distillation_cfg.get("remove_thinking_from_demonstration", False),
+                languages,
+                self_distillation_cfg.get("preferred_solution_languages", ["en"]),
             )
             for i in range(batch_size)
         ]
@@ -736,6 +786,11 @@ class RayPPOTrainer:
                     prompt=prompt_texts[i],
                     solution=solution_section,
                     feedback=feedback_section,
+                    response_language=(
+                        str(languages[i])
+                        if languages is not None and languages[i] is not None and str(languages[i]).strip()
+                        else "the language of the original question"
+                    ),
                 )
             else:
                 reprompt_text = prompt_texts[i]
@@ -777,12 +832,12 @@ class RayPPOTrainer:
             device=device
         )
 
-        uids = set(batch.non_tensor_batch["uid"])
+        solution_groups = set(group_ids)
         num_with_feedback_available = sum(1 for f in feedback_list if f is not None)
         num_with_feedback_used = sum(1 for f in feedback_used if f)
         num_with_solution = sum(1 for s in solution_strs if s is not None)
         metrics = {
-            "self_distillation/success_group_fraction": len([uid for uid in uids if len(success_by_uid[uid]) > 0]) / len(uids),
+            "self_distillation/success_group_fraction": len([group_id for group_id in solution_groups if len(success_by_uid[group_id]) > 0]) / len(solution_groups),
             "self_distillation/success_sample_fraction": num_with_solution / batch_size,
             "self_distillation/feedback_available_fraction": num_with_feedback_available / batch_size,
             "self_distillation/feedback_used_fraction": num_with_feedback_used / batch_size,

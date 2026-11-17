@@ -87,6 +87,11 @@ module = [
 ]
 ignore_errors = false
 
+[tool.uv]
+conflicts = [
+  [{ extra = "sglang" }, { extra = "vllm" }],
+]
+
 # -------------------------------
 # tool.setuptools - Additional config
 # -------------------------------

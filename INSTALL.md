@@ -15,21 +15,24 @@ Choose **one** of the following methods to set up your environment.
 ### Method A: Local Python Environment (Recommended)
 This is the standard approach for local workstations (e.g., RTX 5090).
 
-**1. Install PyTorch:**
+Use a dedicated SDPO environment under `$HOME/environments` (do not share the NeMo-RL environment; their pinned dependencies differ):
 ```bash
-# Install PyTorch 2.5.1 (Stable for CUDA 12.4)
-pip install torch==2.5.1 torchvision torchaudio --index-url https://download.pytorch.org/whl/cu124
+mkdir -p "$HOME/environments"
+python3.12 -m venv "$HOME/environments/sdpo"
+source "$HOME/environments/sdpo/bin/activate"
 ```
 
-**2. Install SDPO and Dependences:**
+**1. Install PyTorch:** Choose the wheel matching your GPU and CUDA stack. For CUDA 12.4:
+```bash
+pip install torch==2.5.1 torchvision torchaudio --index-url https://download.pytorch.org/whl/cu124
+```
+For CUDA 12.8 / Blackwell, use the tested versions in the [README local installation](README.md#option-2-local-installation).
+
+**2. Install SDPO and dependencies:**
 From the root of the repository:
 ```bash
 # Install dependencies
-# Option 1: Stable pinned versions matching the cluster stack (Recommended)
-pip install -r requirements-stable.txt
-
-# Option 2: Latest compatible versions
-# pip install -r requirements.txt
+pip install -r requirements.txt
 
 # Install SDPO (verl) in editable mode
 pip install -e .
@@ -65,6 +68,8 @@ These components are not strictly required for the basic PPO training loop but a
 ### vLLM & SGLang (High-Performance Inference)
 
 This codebase supports vLLM and SGLang for high-throughput inference, which significantly accelerates the rollout phase of reinforcement learning. While optional for basic usage, they are recommended for large-scale training.
+
+The vLLM and SGLang extras are mutually exclusive in a single environment; use separate environments if you need both.
 
 **Installation:**
 ```bash

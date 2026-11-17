@@ -116,6 +116,13 @@ enroot import -x mount -o sdpo-gh200.sqsh podman://localhost/sdpo-gh200:latest
 
 #### Option 2: Local Installation
 
+Create and activate a dedicated SDPO environment. Keep it separate from NeMo-RL because the projects pin different dependency stacks.
+```bash
+mkdir -p "$HOME/environments"
+python3.12 -m venv "$HOME/environments/sdpo"
+source "$HOME/environments/sdpo/bin/activate"
+```
+
 1. **Install PyTorch:**
 
 *   **For Ampere/Hopper (RTX 30/40, H100):**
@@ -327,9 +334,15 @@ Located at `actor.self_distillation` in the config. Only active when `actor.poli
 
 - **remove_thinking_from_demonstration** (bool, default: `True`): Whether to remove `<think>...</think>` tags from demonstrations.
 
+- **solution_group_key** (str, default: `"parallel_id"`): Dataset column grouping translations of the same problem. If absent, SDPO falls back to its rollout `uid` grouping.
+
+- **solution_language_key** (str, default: `"language"`): Dataset column holding the prompt language label or code.
+
+- **preferred_solution_languages** (list[str], default: `["en"]`): Preferred successful demonstration languages, in order. SDPO falls back to another successful candidate if no preferred-language candidate is available.
+
 #### Template Settings
 
-- **reprompt_template** (str): Main template for reprompting. Placeholders: `{prompt}`, `{solution}`, `{feedback}`.
+- **reprompt_template** (str): Main template for reprompting. Placeholders: `{prompt}`, `{solution}`, `{feedback}`, `{response_language}`.
 
 - **solution_template** (str): Template for the solution section. Placeholder: `{successful_previous_attempt}`.
 
@@ -340,6 +353,26 @@ Located at `actor.self_distillation` in the config. Only active when `actor.poli
 - **include_environment_feedback** (bool, default: `True`): Whether to include environment feedback (e.g., test errors) in reprompting.
 
 - **environment_feedback_only_without_solution** (bool, default: `True`): If `True`, only use feedback when no successful solution is available.
+
+### Parallel multilingual data
+
+To share English demonstrations with non-English rollouts, include these columns in each training row:
+
+- `parallel_id`: a stable identifier shared by translations of the same underlying problem.
+- `language`: a language label or code such as `en`, `es`, or `zh`.
+
+Include the parallel variants in the training data so they can be sampled in the same training batch. The reward/advantage `uid` remains separate for each prompt; SDPO uses `parallel_id` only to retrieve a successful demonstration. For a non-English rollout, it prefers a successful English rollout in the same parallel group, excludes that rollout's own response, and falls back to another successful language if no English candidate is present. The teacher prompt keeps the original prompt and asks for an answer in its language; the original rollout response remains the distillation target. If no parallel candidate is sampled successfully, that example gets no solution-based distillation on that step.
+
+The SDPO config enables a group-aware batch sampler through `data.parallel_group_batching`. It packs complete groups into batches of `data.train_batch_size` rows, so translations sharing a `parallel_id` are never split across generation batches. Groups larger than the batch size are rejected; groups left over when a full batch cannot be formed are skipped for that epoch. Keep each parallel group small enough for the configured batch size, and choose a batch size that can pack the group sizes efficiently.
+
+Example rows:
+
+```json
+{"parallel_id":"problem-0042","language":"en","prompt":[{"role":"user","content":"What is 6 times 7?"}]}
+{"parallel_id":"problem-0042","language":"es","prompt":[{"role":"user","content":"¿Cuánto es 6 por 7?"}]}
+```
+
+`prompt` should follow the configured dataset chat format. For other column names, set `actor_rollout_ref.actor.self_distillation.solution_group_key` and `solution_language_key`. Size `max_reprompt_len` for both prompt languages, the demonstration, and template overhead; `reprompt_truncation: error` can help catch undersized limits during data preparation.
 
 ---
 

@@ -116,6 +116,15 @@ self_distillation:
   # Whether to remove <think>...</think> tags from successful demonstrations before reprompting
   remove_thinking_from_demonstration: True
 
+  # Dataset column shared by translations of the same problem; falls back to rollout uid when absent
+  solution_group_key: parallel_id
+
+  # Dataset column containing the rollout prompt language
+  solution_language_key: language
+
+  # Prefer a successful demonstration from these languages, in order
+  preferred_solution_languages: [en]
+
   # Whether to include environment feedback in reprompting for wrong attempts
   # If True and feedback exists: use reprompt_template_feedback_solution (with solution) or reprompt_template_feedback (without solution)
   include_environment_feedback: True
@@ -127,16 +136,16 @@ self_distillation:
   # IS clip for loss; null disables IS weighting
   is_clip: 2
 
-  # Reprompting template - available variables: prompt, successful_previous_attempt, feedback
+  # Reprompting template - available variables: prompt, solution, feedback, response_language
   reprompt_template: |-
     {prompt}{solution}{feedback}
 
-    Correctly solve the original question.
+    Use the solution as guidance. Correctly solve the original question and write your answer in {response_language}.
 
   # Solution template - available variables: successful_previous_attempt
   solution_template: |-
 
-    Correct solution:
+    Successful solution for this problem (it may be in another language):
 
     {successful_previous_attempt}
 

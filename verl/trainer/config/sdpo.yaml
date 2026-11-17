@@ -12,7 +12,7 @@ max_model_len: 18944
 
 actor_rollout_ref:
   actor:
-    ppo_mini_batch_size: 32 # TODO: make slightly off-policy in the future; use same as baseline; perhaps make 1 again for fastest convergence
+    ppo_mini_batch_size: 28
     policy_loss:
       loss_mode: sdpo
     self_distillation:
@@ -32,7 +32,10 @@ algorithm:
     rollout_is_threshold: 2.0
 
 data:
-  train_batch_size: 32
+  train_batch_size: 28
+  parallel_group_batching:
+    enabled: True
+    group_key: parallel_id
 
 trainer:
   val_before_train: False

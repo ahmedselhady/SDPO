@@ -58,6 +58,9 @@ class SelfDistillationConfig(BaseConfig):
         feedback_template (str): Template for formatting feedback section. Uses {feedback_raw} placeholder.
         include_environment_feedback (bool): Whether to include environment feedback in reprompting for wrong attempts.
         environment_feedback_only_without_solution (bool): If True, only use feedback when no solution is available (ignore feedback when solution exists).
+        solution_group_key (str): Dataset column identifying parallel translations of the same problem.
+        solution_language_key (str): Dataset column containing each prompt's language code or name.
+        preferred_solution_languages (list[str]): Languages preferred for demonstrations, in priority order.
         reprompt_template_feedback (str): Template for reprompting with feedback but no solution.
         reprompt_template_feedback_solution (str): Template for reprompting with both feedback and solution.
     """
@@ -90,6 +93,9 @@ class SelfDistillationConfig(BaseConfig):
     )
     include_environment_feedback: bool = False
     environment_feedback_only_without_solution: bool = False
+    solution_group_key: Optional[str] = "parallel_id"
+    solution_language_key: Optional[str] = "language"
+    preferred_solution_languages: list[str] = field(default_factory=lambda: ["en"])
 
     def __post_init__(self):
         if not 0.0 <= self.alpha <= 1.0:

@@ -47,6 +47,15 @@ val_batch_size: null
 # use tool config to calculate true prompt length
 tool_config_path: ${oc.select:actor_rollout_ref.rollout.multi_turn.tool_config_path, null}
 
+# Keep all dataset rows sharing a parallel ID in the same generation batch.
+parallel_group_batching:
+
+  # Enable only when the dataset contains parallel_id (or the configured group_key).
+  enabled: False
+
+  # Dataset column containing the shared ID for parallel examples.
+  group_key: parallel_id
+
 # Whether to return the original input_ids without adding chat template.
 # This is used when the reward model's chat template differs from the policy.
 # If using a model-based RM with different templates, this should be True.
