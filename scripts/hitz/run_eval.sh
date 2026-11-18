@@ -49,6 +49,16 @@ if [[ -f "$LM_EVAL_DIR/.venv/bin/activate" ]]; then
     source "$LM_EVAL_DIR/.venv/bin/activate"
 fi
 
+# The A100 hitz nodes are Zen3; use their matching compiler for Triton helpers.
+TRITON_GCC="/scicomp/builds/Rocky/8.7/Zen3/software/GCCcore/11.3.0/bin/gcc"
+TRITON_BINUTILS="/scicomp/builds/Rocky/8.7/Zen3/software/binutils/2.38-GCCcore-11.3.0/bin"
+if [[ ! -x "$TRITON_GCC" || ! -x "$TRITON_BINUTILS/as" ]]; then
+    echo "ERROR: Zen3 GCC/binutils required by Triton are unavailable." >&2
+    exit 1
+fi
+export CC="$TRITON_GCC"
+export PATH="$TRITON_BINUTILS:$PATH"
+
 if ! command -v lm_eval >/dev/null 2>&1; then
     echo "ERROR: lm_eval is not on PATH. Install lm-evaluation-harness or activate its environment." >&2
     exit 1

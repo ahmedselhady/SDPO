@@ -1616,6 +1616,10 @@ class RayPPOTrainer:
 
         from verl.utils.tracking import Tracking
 
+        def log_training_event(event: str) -> None:
+            timestamp = time.strftime("%Y-%m-%d %H:%M:%S")
+            print(f"[{timestamp}] [SDPO training] {event}", flush=True)
+
         logger = Tracking(
             project_name=self.config.trainer.project_name,
             experiment_name=self.config.trainer.experiment_name,
@@ -1626,14 +1630,22 @@ class RayPPOTrainer:
 
         self.global_steps = 0
 
+        log_training_event(
+            f"Starting experiment={self.config.trainer.experiment_name} "
+            f"epochs={self.config.trainer.total_epochs} planned_steps={self.total_training_steps}"
+        )
+
         # load checkpoint before doing anything
+        log_training_event("Loading checkpoint state")
         self._load_checkpoint()
+        log_training_event(f"Checkpoint state ready; starting at step={self.global_steps}")
 
         current_epoch = self.global_steps // len(self.train_dataloader)
 
         # perform validation before training
         # currently, we only support validation using the reward_function.
         if self.val_reward_fn is not None and self.config.trainer.get("val_before_train", True):
+            log_training_event("Running validation before training")
             val_metrics = self._validate()
             assert val_metrics, f"{val_metrics=}"
             pprint(f"Initial validation metrics: {val_metrics}")
@@ -1675,6 +1687,10 @@ class RayPPOTrainer:
                         else curr_step_profile
                     )
                 batch: DataProto = DataProto.from_single_dict(batch_dict)
+                log_training_event(
+                    f"step={self.global_steps}/{self.total_training_steps} epoch={epoch + 1} "
+                    f"loaded batch with {len(batch.batch)} prompts"
+                )
                 batch.meta_info["temperature"] = self.config.actor_rollout_ref.rollout.temperature
 
                 # add uid to batch
@@ -1693,6 +1709,8 @@ class RayPPOTrainer:
                 is_last_step = self.global_steps >= self.total_training_steps
                 with marked_timer("step", timing_raw):
                     # generate a batch
+                    response_count = gen_batch_output.batch.batch_size[0]
+                    log_training_event(f"step={self.global_steps} generating {response_count} responses")
                     with marked_timer("gen", timing_raw, color="red"):
                         if not self.async_rollout_mode:
                             gen_batch_output = self.actor_rollout_wg.generate_sequences(gen_batch_output)
@@ -1701,6 +1719,7 @@ class RayPPOTrainer:
 
                         timing_raw.update(gen_batch_output.meta_info["timing"])
                         gen_batch_output.meta_info.pop("timing", None)
+                    log_training_event(f"step={self.global_steps} rollout generation complete")
 
                     if self.config.algorithm.adv_estimator == AdvantageEstimator.REMAX:
                         if self.reward_fn is None:
@@ -1760,6 +1779,7 @@ class RayPPOTrainer:
                         images_seqlens_all.extend(multi_modal_input["images_seqlens"].tolist())
                     batch.meta_info["images_seqlens"] = images_seqlens_all
                     with marked_timer("reward", timing_raw, color="yellow"):
+                        log_training_event(f"step={self.global_steps} computing rewards")
                         # compute reward model score
                         if self.use_rm and "rm_scores" not in batch.batch.keys():
                             if not self.use_reward_loop:
@@ -1778,6 +1798,7 @@ class RayPPOTrainer:
                             reward_tensor, reward_extra_infos_dict = self._compute_or_extract_reward(
                                 batch, reward_fn=self.reward_fn, return_dict=False
                             )
+                    log_training_event(f"step={self.global_steps} reward computation complete")
 
                     # Operating Mode Selection:
                     # - Bypass mode: Sets old_log_probs = rollout_log_probs (2 policies: π_rollout, π_θ)
@@ -1833,6 +1854,7 @@ class RayPPOTrainer:
                             batch = batch.union(values)
 
                     with marked_timer("adv", timing_raw, color="brown"):
+                        log_training_event(f"step={self.global_steps} computing SDPO data and advantages")
                         # we combine with rule-based rm
                         reward_extra_infos_dict: dict[str, list]
                         if self.config.reward_model.launch_reward_fn_async:
@@ -1886,6 +1908,7 @@ class RayPPOTrainer:
                             norm_adv_by_std_in_grpo=norm_adv_by_std_in_grpo,
                             config=self.config.algorithm,
                         )
+                    log_training_event(f"step={self.global_steps} advantages ready")
 
                     # update critic
                     if self.use_critic:
@@ -1897,10 +1920,12 @@ class RayPPOTrainer:
                     # implement critic warmup
                     if self.config.trainer.critic_warmup <= self.global_steps:
                         # update actor
+                        log_training_event(f"step={self.global_steps} updating actor policy")
                         with marked_timer("update_actor", timing_raw, color="red"):
                             actor_output = self._update_actor(batch)
                         actor_output_metrics = reduce_metrics(actor_output.meta_info["metrics"])
                         metrics.update(actor_output_metrics)
+                        log_training_event(f"step={self.global_steps} actor update complete")
 
                     # Log rollout generations if enabled
                     rollout_data_dir = self.config.trainer.get("rollout_data_dir", None)
@@ -1913,6 +1938,7 @@ class RayPPOTrainer:
                     and self.config.trainer.test_freq > 0
                     and (is_last_step or self.global_steps % self.config.trainer.test_freq == 0)
                 ):
+                    log_training_event(f"step={self.global_steps} running validation")
                     with marked_timer("testing", timing_raw, color="green"):
                         val_metrics: dict = self._validate()
                         if is_last_step:
@@ -1934,6 +1960,7 @@ class RayPPOTrainer:
                 if self.config.trainer.save_freq > 0 and (
                     is_last_step or self.global_steps % self.config.trainer.save_freq == 0 or esi_close_to_expiration
                 ):
+                    log_training_event(f"step={self.global_steps} saving checkpoint")
                     if esi_close_to_expiration:
                         print("Force saving checkpoint: ESI instance expiration approaching.")
                     with marked_timer("save_checkpoint", timing_raw, color="green"):
@@ -1980,6 +2007,7 @@ class RayPPOTrainer:
 
                 # TODO: make a canonical logger that supports various backend
                 logger.log(data=metrics, step=self.global_steps)
+                log_training_event(f"step={self.global_steps} metrics logged; duration={steps_duration:.2f}s")
 
                 progress_bar.update(1)
                 self.global_steps += 1
@@ -1996,6 +2024,7 @@ class RayPPOTrainer:
                     if hasattr(self.actor_rollout_wg, "async_calls_finalize_fn_exec"):
                         self.actor_rollout_wg.async_calls_finalize_fn_exec(blocking=True)
                     pprint(f"Final validation metrics: {last_val_metrics}")
+                    log_training_event("Training complete")
                     progress_bar.close()
                     return
 
