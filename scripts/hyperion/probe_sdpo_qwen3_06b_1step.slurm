@@ -20,7 +20,7 @@ ENV_DIR="${SDPO_ENV:-$SDPO_DIR/.venv}"
 DATA_DIR="$SDPO_DIR/datasets/mAceReason-Math-en-es-10"
 MODEL_PATH="suayptalha/Qwen3-0.6B-Math-Expert"
 EXPERIMENT="sdpo-qwen3-06b-math-expert-probe"
-CACHE_DIR="/scratch/asalem/repos/.cache/huggingface"
+CACHE_DIR="${CACHE_DIR:-/scratch/asalem/.cache/huggingface}"
 CHECKPOINT_DIR="$SDPO_DIR/checkpoints/$EXPERIMENT"
 
 notify_failure() {

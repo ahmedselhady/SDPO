@@ -353,7 +353,11 @@ class TaskRunner:
             is_train=False,
             max_samples=config.data.get("val_max_samples", -1),
         )
-        train_sampler = create_rl_sampler(config.data, train_dataset)
+        # Parallel-group batching supplies its own batch sampler and cannot be
+        # combined with a row-level sampler.
+        train_sampler = None
+        if not config.data.get("parallel_group_batching", {}).get("enabled", False):
+            train_sampler = create_rl_sampler(config.data, train_dataset)
 
         # Initialize the PPO trainer.
         trainer = RayPPOTrainer(

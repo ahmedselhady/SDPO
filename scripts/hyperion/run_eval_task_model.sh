@@ -3,14 +3,14 @@
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=8
-#SBATCH --gres=gpu:2
+#SBATCH --gres=gpu:1
 #SBATCH --constraint=a100-sxm4
 #SBATCH --mem=64gb
-#SBATCH --time=1-00:00:00
+#SBATCH --time=2-00:00:00
 #SBATCH --mail-user=ahmed.salemmohamed@ehu.eus
 #SBATCH --mail-type=FAIL
-#SBATCH --output=.slurm/%x.out
-#SBATCH --error=.slurm/%x.err
+#SBATCH --output=.slurm/%x-%A_%a.out
+#SBATCH --error=.slurm/%x-%A_%a.err
 
 set -euo pipefail
 
@@ -23,6 +23,8 @@ $NOTIFY "🚀 $TAG started"
 WORKDIR="${WORKDIR:-/scratch/asalem/repos/SDPO}"
 LM_EVAL_DIR="${LM_EVAL_DIR:-/scratch/asalem/repos/lm-evaluation-harness}"
 RESULTS_DIR="${RESULTS_DIR:-$WORKDIR/eval_results/macereason_math}"
+SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+source "$SCRIPT_DIR/eval_tasks.sh"
 
 ENV_FILE="$WORKDIR/.env"
 if [[ ! -f "$ENV_FILE" ]]; then
@@ -44,7 +46,7 @@ fi
 
 export RAY_ENABLE_UV_RUN_RUNTIME_ENV=0
 export PYTHONUNBUFFERED=1
-export HF_HOME="${HF_HOME:-~/.cache/huggingface}"
+export HF_HOME="${HF_HOME:-/scratch/asalem/.cache/huggingface}"
 export HF_DATASETS_CACHE="${HF_DATASETS_CACHE:-$HF_HOME/datasets}"
 
 module load CUDA/12.8.0
@@ -73,10 +75,27 @@ fi
 mkdir -p "$RESULTS_DIR"
 cd "$LM_EVAL_DIR"
 
+model="${MODEL:-${1:-}}"
+if [[ -z "$model" ]]; then
+    echo "ERROR: set MODEL or pass the model as the first argument." >&2
+    exit 1
+fi
 
-$NOTIFY "🚀 $TAG started"
-model=$1
-task=$2
+if [[ -n "${SLURM_ARRAY_TASK_ID:-}" ]]; then
+    task_index="$SLURM_ARRAY_TASK_ID"
+    if [[ ! "$task_index" =~ ^[0-9]+$ ]] || (( task_index >= ${#EVAL_TASKS[@]} )); then
+        echo "ERROR: invalid array task index '$task_index' (expected 0-$(( ${#EVAL_TASKS[@]} - 1 )))." >&2
+        exit 1
+    fi
+    task="${EVAL_TASKS[$task_index]}"
+else
+    task="${2:-}"
+fi
+if [[ -z "$task" ]]; then
+    echo "ERROR: set SLURM_ARRAY_TASK_ID or pass the task as the second argument." >&2
+    exit 1
+fi
+
 model_name="${model##*/}"
 model_output="$RESULTS_DIR/${model_name}"
 

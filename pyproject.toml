@@ -91,6 +91,7 @@ ignore_errors = false
 conflicts = [
   [{ extra = "sglang" }, { extra = "vllm" }],
 ]
+extra-build-dependencies = { vllm = ["ninja"] }
 
 # -------------------------------
 # tool.setuptools - Additional config

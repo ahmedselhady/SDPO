@@ -6,8 +6,6 @@
 #SBATCH --gres=gpu:4
 #SBATCH --mem=100gb
 #SBATCH --time=1-00:00:00
-#SBATCH --mail-user=ahmed.salemmohamed@ehu.eus
-#SBATCH --mail-type=FAIL
 #SBATCH --output=.slurm/%x.out
 #SBATCH --error=.slurm/%x.err
 
@@ -36,10 +34,10 @@ ROOT_DIR="/scratch/asalem/repos"
 SDPO_DIR="${SDPO_DIR:-$ROOT_DIR/SDPO}"
 DATA_DIR="${DATA_DIR:-$SDPO_DIR/datasets/mAceReason-Math-en-es-10}"
 SOURCE_DATASET="${SOURCE_DATASET:-ahmedselhady/mAceReason-Math}"
-ENV_DIR="${SDPO_ENV:-/scratch/asalem/repos/SDPO/.venv}"
+ENV_DIR="${SDPO_ENV:-/scratch/asalem/SDPO-venv}"
 MODEL_PATH="${MODEL_PATH:-nvidia/Nemotron-Research-Reasoning-Qwen-1.5B}"
 EXPERIMENT="${EXPERIMENT:-macereason-math-en-es-10-nemotron-1.5b}"
-CACHE_DIR="${CACHE_DIR:-$ROOT_DIR/.cache/huggingface}"
+CACHE_DIR="${CACHE_DIR:-/scratch/asalem/.cache/huggingface}"
 CHECKPOINT_DIR="${CHECKPOINT_DIR:-$SDPO_DIR/checkpoints/$EXPERIMENT}"
 
 ENV_FILE="$SDPO_DIR/.env"
@@ -63,6 +61,8 @@ export HF_HOME="$CACHE_DIR"
 export HF_DATASETS_CACHE="$HF_HOME/datasets"
 export VLLM_USE_V1=1
 export PYTHONUNBUFFERED=1
+RAY_NUM_CPUS="${SLURM_CPUS_PER_TASK:-8}"
+RAY_OBJECT_STORE_MEMORY=$((20 * 1024 * 1024 * 1024))
 
 if [[ ! -f "$ENV_DIR/bin/activate" ]]; then
     echo "SDPO environment not found at $ENV_DIR" >&2
@@ -72,6 +72,9 @@ fi
 
 module load CUDA/12.8.0
 source "$ENV_DIR/bin/activate"
+# The CUDA job may inherit ROCr's device mask from the cluster environment.
+# verl/Ray rejects it when CUDA_VISIBLE_DEVICES is also set.
+unset ROCR_VISIBLE_DEVICES
 # A100 nodes in hitz-exclusive use AMD EPYC 75F3 (Zen 3) CPUs.
 # Triton builds a small CUDA helper with the host C compiler on first use;
 # keep the compiler and assembler matched to the node CPU family.
@@ -107,6 +110,7 @@ $NOTIFY "🚀 $TAG Checkpoint directory: $CHECKPOINT_DIR"
 
 $NOTIFY "🚀 $TAG started training"
 log "Launching verl.trainer.main_ppo; live training progress follows"
+log "Ray resources: cpus=$RAY_NUM_CPUS object_store_memory=${RAY_OBJECT_STORE_MEMORY}B"
 python -m verl.trainer.main_ppo --config-name sdpo \
     "vars.dir=$SDPO_DIR" \
     "vars.task=$TASK" \
@@ -116,6 +120,7 @@ python -m verl.trainer.main_ppo --config-name sdpo \
     "data.parallel_group_batching.enabled=True" \
     "data.parallel_group_batching.group_key=parallel_id" \
     "actor_rollout_ref.model.path=$MODEL_PATH" \
+    "+actor_rollout_ref.model.override_config.attn_implementation=sdpa" \
     "actor_rollout_ref.rollout.n=8" \
     "actor_rollout_ref.actor.ppo_mini_batch_size=2" \
     "trainer.project_name=SDPO-multilingual" \
@@ -130,7 +135,9 @@ python -m verl.trainer.main_ppo --config-name sdpo \
     "trainer.val_before_train=False" \
     "trainer.resume_mode=disable" \
     "trainer.default_local_dir=$CHECKPOINT_DIR" \
-    "trainer.max_actor_ckpt_to_keep=2"
+    "trainer.max_actor_ckpt_to_keep=2" \
+    "ray_kwargs.ray_init.num_cpus=$RAY_NUM_CPUS" \
+    "+ray_kwargs.ray_init.object_store_memory=$RAY_OBJECT_STORE_MEMORY"
 
 log "Training process finished successfully"
 $NOTIFY "✅ $TAG finished successfully"

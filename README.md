@@ -114,42 +114,38 @@ enroot import -x mount -o sdpo-gh200.sqsh podman://localhost/sdpo-gh200:latest
 
 ---
 
-#### Option 2: Local Installation
+#### Option 2: Local Installation (Default for non-GH200 systems)
 
-Create and activate a dedicated SDPO environment. Keep it separate from NeMo-RL because the projects pin different dependency stacks.
+Use `uv` to create the project environment and install SDPO with its vLLM extra. Keep this environment separate from NeMo-RL because the projects pin different dependency stacks. vLLM may build from source on older Linux distributions, so put uv's cache on a filesystem with enough space and quota.
+
 ```bash
-mkdir -p "$HOME/environments"
-python3.12 -m venv "$HOME/environments/sdpo"
-source "$HOME/environments/sdpo/bin/activate"
+# Install uv first if it is not already available: https://docs.astral.sh/uv/getting-started/installation/
+cd /path/to/SDPO
+
+# Use scratch for downloads and compiled build files. Override UV_CACHE_DIR if
+# your cluster uses a different scratch path or your system has no /scratch.
+export UV_CACHE_DIR="${UV_CACHE_DIR:-${SCRATCH:-/scratch/$USER}/.cache/uv}"
+mkdir -p "$UV_CACHE_DIR"
+
+# Avoid hardlink warnings on filesystems that do not support hardlinks.
+export UV_LINK_MODE=copy
+
+# The cluster setup below targets A100 GPUs (compute capability 8.0).
+# Set this to your GPU architecture when installing for other hardware.
+export TORCH_CUDA_ARCH_LIST="${TORCH_CUDA_ARCH_LIST:-8.0}"
+
+# Creates .venv and installs SDPO plus vLLM.
+uv sync --python 3.12 --extra vllm
+source .venv/bin/activate
 ```
 
-1. **Install PyTorch:**
+The vLLM and SGLang extras are mutually exclusive. To use SGLang instead, replace `--extra vllm` with `--extra sglang`.
 
-*   **For Ampere/Hopper (RTX 30/40, H100):**
-    ```bash
-    pip install torch==2.5.1 torchvision torchaudio --index-url https://download.pytorch.org/whl/cu124
-    ```
+If a vLLM build is interrupted, clear its partial CMake build cache before retrying. Keep `UV_CACHE_DIR` set so the command cleans the scratch cache:
 
-*   **For Blackwell (RTX 50, RTX PRO 2000 Blackwell):**
-    ```bash
-    pip install torch==2.7.0 torchvision torchaudio --index-url https://download.pytorch.org/whl/cu128
-    ```
-
-2. **Install SDPO and Dependencies:**
 ```bash
-# Install core dependencies (pinned versions)
-pip install -r requirements.txt
-
-# Install SDPO (verl) in editable mode
-pip install -e .
-
-# Install Flash Attention 2 (compiled from source)
-pip install flash-attn --no-build-isolation
-```
-
-3. **Optional: Install SGLang/vLLM for high-throughput inference:**
-```bash
-pip install -r requirements_sglang.txt
+uv cache clean vllm
+uv sync --python 3.12 --extra vllm
 ```
 
 ---
@@ -161,7 +157,7 @@ pip install -r requirements_sglang.txt
 | `requirements.txt` | Core dependencies with pinned versions |
 | `requirements-gh200.txt` | For NGC vLLM container (excludes pre-installed packages) |
 | `requirements-full.txt` | Complete pip freeze from working environment |
-| `requirements_sglang.txt` | SGLang/vLLM stack for local inference |
+| `requirements_sglang.txt` | Legacy pip requirements for SGLang-based setups |
 | `requirements-cuda.txt` | Flash Attention (for non-Docker installs) |
 
 **vLLM Version Note:**
