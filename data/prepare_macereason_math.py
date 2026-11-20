@@ -3,6 +3,7 @@
 
 import argparse
 from collections import defaultdict
+import math
 from pathlib import Path
 import random
 
@@ -72,7 +73,10 @@ def extract_problem(value):
     return ""
 
 
-def convert_split(dataset_name, split, languages, id_column, problem_column, solution_column, max_groups=None, seed=42):
+def convert_split(
+    dataset_name, split, languages, id_column, problem_column, solution_column,
+    max_groups=None, seed=42, percentage=None,
+):
     config_names = set(get_dataset_config_names(dataset_name))
     combined_cache = {}
     rows = []
@@ -144,11 +148,19 @@ def convert_split(dataset_name, split, languages, id_column, problem_column, sol
             f"{sorted(expected_languages)}. Examples: {examples}"
         )
 
+    if percentage is not None:
+        if not group_languages:
+            raise ValueError(f"No usable parallel groups in split {split!r}")
+        max_groups = math.ceil(len(group_languages) * percentage / 100)
+
     if max_groups is not None:
-        english_group_ids = list(dict.fromkeys(row["parallel_id"] for row in rows if row["language"] == "en"))
-        if max_groups > len(english_group_ids):
-            raise ValueError(f"Requested {max_groups} groups but split {split!r} has only {len(english_group_ids)}")
-        selected_group_ids = set(random.Random(seed).sample(english_group_ids, max_groups))
+        if "en" in languages:
+            group_ids = list(dict.fromkeys(row["parallel_id"] for row in rows if row["language"] == "en"))
+        else:
+            group_ids = sorted(group_languages)
+        if max_groups > len(group_ids):
+            raise ValueError(f"Requested {max_groups} groups but split {split!r} has only {len(group_ids)}")
+        selected_group_ids = set(random.Random(seed).sample(group_ids, max_groups))
         rows = [row for row in rows if row["parallel_id"] in selected_group_ids]
         group_languages = {group_id: group_languages[group_id] for group_id in selected_group_ids}
 
@@ -171,22 +183,31 @@ def main():
     parser.add_argument("--id-column", default=None, help="Stable source ID column (auto-detected by default)")
     parser.add_argument("--problem-column", default=None, help="Problem text column (auto-detected by default)")
     parser.add_argument("--solution-column", default=None, help="Answer column (auto-detected by default)")
-    parser.add_argument(
+    subset = parser.add_mutually_exclusive_group()
+    subset.add_argument(
         "--max-train-groups",
         type=int,
         default=None,
         help="Randomly select this many parallel problem IDs from train; each selected ID retains all languages",
     )
+    subset.add_argument(
+        "--train-percentage", type=float,
+        help="Percentage of usable train problem IDs to sample, rounded up; retain every requested language",
+    )
     parser.add_argument("--seed", type=int, default=42, help="Seed for train-group subsampling")
     args = parser.parse_args()
 
     languages = [canonical_language(language) for language in args.languages.split(",") if language.strip()]
-    if "en" not in languages:
+    if not languages:
+        parser.error("--languages must contain at least one language code")
+    if args.train_percentage is None and "en" not in languages:
         raise ValueError("The English language config 'en' is required for SDPO English demonstrations")
     if len(languages) != len(set(languages)):
         raise ValueError(f"Duplicate languages requested: {languages}")
     if args.max_train_groups is not None and args.max_train_groups <= 0:
         raise ValueError("--max-train-groups must be a positive integer")
+    if args.train_percentage is not None and not 0 < args.train_percentage <= 100:
+        parser.error("--train-percentage must be greater than 0 and at most 100")
 
     output_dir = Path(args.output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -200,6 +221,7 @@ def main():
             args.solution_column,
             max_groups=args.max_train_groups if source_split == args.train_split else None,
             seed=args.seed,
+            percentage=args.train_percentage if source_split == args.train_split else None,
         )
         output_path = output_dir / output_name
         dataset.to_parquet(str(output_path))

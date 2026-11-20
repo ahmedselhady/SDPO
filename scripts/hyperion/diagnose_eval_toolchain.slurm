@@ -14,18 +14,20 @@
 
 set -uo pipefail
 
+NOTIFY="${NOTIFY:-$HOME/bin/slack_notify.py}"
+
 WORKDIR="${WORKDIR:-/scratch/asalem/repos/SDPO}"
 LM_EVAL_DIR="${LM_EVAL_DIR:-/scratch/asalem/repos/lm-evaluation-harness}"
 ENV_DIR="$LM_EVAL_DIR/.venv"
 
-echo "=== Node and allocation ==="
+"$NOTIFY" "=== Node and allocation ===" || true
 date --iso-8601=seconds
 hostname
 scontrol show job "$SLURM_JOB_ID" 2>/dev/null || true
 lscpu | rg '^(Architecture|CPU op-mode|Model name|Vendor ID|CPU family|Model:|Flags):' || true
 nvidia-smi || true
 
-echo "=== Modules and toolchain ==="
+"$NOTIFY" "=== Modules and toolchain ===" || true
 module load CUDA/12.8.0
 module list 2>&1 || true
 
@@ -34,15 +36,15 @@ TRITON_GCC="/scicomp/builds/Rocky/8.7/$CPU_FAMILY/software/GCCcore/11.3.0/bin/gc
 TRITON_BINUTILS="/scicomp/builds/Rocky/8.7/$CPU_FAMILY/software/binutils/2.38-GCCcore-11.3.0/bin"
 AS_DIR="${AS_DIR:-$TRITON_BINUTILS}"
 if [[ ! -x "$TRITON_GCC" || ! -x "$TRITON_BINUTILS/as" ]]; then
-    echo "ERROR: GCC/binutils toolchain for CPU family $CPU_FAMILY is unavailable." >&2
+    "$NOTIFY" "ERROR: GCC/binutils toolchain for CPU family $CPU_FAMILY is unavailable." || true
     exit 2
 fi
 export CC="$TRITON_GCC"
 export PATH="$AS_DIR:$(dirname "$TRITON_GCC"):$PATH"
 
-echo "CC=$CC"
-echo "gcc=$(command -v gcc || true)"
-echo "as=$(command -v as || true)"
+"$NOTIFY" "CC=$CC" || true
+"$NOTIFY" "gcc=$(command -v gcc || true)" || true
+"$NOTIFY" "as=$(command -v as || true)" || true
 gcc --version || true
 as --version || true
 
@@ -51,18 +53,18 @@ trap 'rm -rf "$tmpdir"' EXIT
 cat > "$tmpdir/probe.c" <<'EOF'
 int main(void) { return 0; }
 EOF
-echo "=== Minimal GCC/assembler compile ==="
+"$NOTIFY" "=== Minimal GCC/assembler compile ===" || true
 gcc -v -O3 "$tmpdir/probe.c" -o "$tmpdir/probe"
 gcc_rc=$?
-echo "minimal_compile_exit_code=$gcc_rc"
+"$NOTIFY" "minimal_compile_exit_code=$gcc_rc" || true
 if [[ $gcc_rc -eq 0 ]]; then
     "$tmpdir/probe"
-    echo "minimal_binary_exit_code=$?"
+    "$NOTIFY" "minimal_binary_exit_code=$?" || true
 fi
 
-echo "=== lm-eval uv environment and Triton probes ==="
+"$NOTIFY" "=== lm-eval uv environment and Triton probes ===" || true
 if [[ ! -x "$ENV_DIR/bin/python" ]]; then
-    echo "ERROR: expected Python executable missing: $ENV_DIR/bin/python" >&2
+    "$NOTIFY" "ERROR: expected Python executable missing: $ENV_DIR/bin/python" || true
     exit 2
 fi
 cat > "$tmpdir/triton_probe.py" <<'PY'
@@ -109,9 +111,9 @@ except Exception:
 PY
 "$ENV_DIR/bin/python" "$tmpdir/triton_probe.py"
 python_rc=$?
-echo "triton_probe_exit_code=$python_rc"
+"$NOTIFY" "triton_probe_exit_code=$python_rc" || true
 
 if [[ $gcc_rc -ne 0 || $python_rc -ne 0 ]]; then
     exit 1
 fi
-echo "All compiler and Triton probes passed."
+"$NOTIFY" "All compiler and Triton probes passed." || true

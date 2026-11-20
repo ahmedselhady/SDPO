@@ -16,20 +16,16 @@
 
 set -euo pipefail
 
-log() {
-    printf '[%s] %s\n' "$(date '+%Y-%m-%d %H:%M:%S %Z')" "$*"
-}
-
-NOTIFY=~/bin/slack_notify.py
+NOTIFY="${NOTIFY:-$HOME/bin/slack_notify.py}"
 TAG="$SLURM_JOB_NAME (#$SLURM_JOB_ID) on $(hostname)"
 # Fires on scancel or time limit (Slurm sends SIGTERM first)
-trap '$NOTIFY "⚠️ $TAG was terminated (cancelled or hit time limit)"; kill $pid 2>/dev/null; exit 143' TERM
+trap '"$NOTIFY" "⚠️ $TAG was terminated (cancelled or hit time limit)" || true; exit 143' TERM
 
 notify_failure() {
     local rc=$?
     trap - ERR
-    if ! $NOTIFY "❌ $TAG failed with exit code $rc"; then
-        echo "Failed to send failure notification" >&2
+    if ! "$NOTIFY" "❌ $TAG failed with exit code $rc"; then
+        printf '%s\n' 'Failed to send failure notification' >&2
     fi
     exit "$rc"
 }
@@ -47,14 +43,14 @@ CHECKPOINT_DIR="${CHECKPOINT_DIR:-$SDPO_DIR/checkpoints/$EXPERIMENT}"
 
 ENV_FILE="$SDPO_DIR/.env"
 if [[ ! -f "$ENV_FILE" ]]; then
-    echo "ERROR: .env not found at $ENV_FILE; set HF_TOKEN in this file." >&2
+    "$NOTIFY" "ERROR: .env not found at $ENV_FILE; set HF_TOKEN in this file." || true
     exit 1
 fi
 set -a
 source "$ENV_FILE"
 set +a
 if [[ -z "${HF_TOKEN:-}" ]]; then
-    echo "ERROR: HF_TOKEN is not set in $ENV_FILE" >&2
+    "$NOTIFY" "ERROR: HF_TOKEN is not set in $ENV_FILE" || true
     exit 1
 fi
 
@@ -70,8 +66,8 @@ RAY_NUM_CPUS="${SLURM_CPUS_PER_TASK:-8}"
 RAY_OBJECT_STORE_MEMORY=$((20 * 1024 * 1024 * 1024))
 
 if [[ ! -f "$ENV_DIR/bin/activate" ]]; then
-    echo "SDPO environment not found at $ENV_DIR" >&2
-    echo "Create it using the setup instructions in SDPO/README.md." >&2
+    "$NOTIFY" "SDPO environment not found at $ENV_DIR" || true
+    "$NOTIFY" "Create it using the setup instructions in SDPO/README.md." || true
     exit 1
 fi
 
@@ -86,7 +82,7 @@ unset ROCR_VISIBLE_DEVICES
 TRITON_GCC="/scicomp/builds/Rocky/8.7/Zen3/software/GCCcore/11.3.0/bin/gcc"
 TRITON_BINUTILS="/scicomp/builds/Rocky/8.7/Zen3/software/binutils/2.38-GCCcore-11.3.0/bin"
 if [[ ! -x "$TRITON_GCC" || ! -x "$TRITON_BINUTILS/as" ]]; then
-    echo "ERROR: Zen3 GCC/binutils required by Triton are unavailable." >&2
+    "$NOTIFY" "ERROR: Zen3 GCC/binutils required by Triton are unavailable." || true
     exit 1
 fi
 export CC="$TRITON_GCC"
@@ -96,25 +92,23 @@ ulimit -c 0
 cd "$SDPO_DIR"
 mkdir -p "$DATA_DIR" "$CHECKPOINT_DIR" "$HF_HOME" "$HF_DATASETS_CACHE"
 
-log "Preparing dataset: source=$SOURCE_DATASET output=$DATA_DIR max_train_groups=500 seed=42"
-$NOTIFY "🚀 $TAG Preparing 500 parallel problem IDs across all 14 languages from $SOURCE_DATASET"
+"$NOTIFY" "Preparing dataset: source=$SOURCE_DATASET output=$DATA_DIR max_train_groups=500 seed=42" || true
 
 python data/prepare_macereason_math.py \
     --dataset "$SOURCE_DATASET" \
     --output-dir "$DATA_DIR" \
     --max-train-groups 500 \
     --seed 42
-log "Dataset preparation complete"
+"$NOTIFY" "Dataset preparation complete" || true
 
-$NOTIFY "🚀 $TAG Starting SDPO multilingual subset training"
-$NOTIFY "🚀 $TAG Model: $MODEL_PATH"
-$NOTIFY "🚀 $TAG Data: $DATA_DIR"
-$NOTIFY "🚀 $TAG Experiment: $EXPERIMENT"
-$NOTIFY "🚀 $TAG Checkpoint directory: $CHECKPOINT_DIR"
+"$NOTIFY" "🚀 $TAG Starting SDPO multilingual subset training" || true
+"$NOTIFY" "🚀 $TAG Model: $MODEL_PATH" || true
+"$NOTIFY" "🚀 $TAG Data: $DATA_DIR" || true
+"$NOTIFY" "🚀 $TAG Experiment: $EXPERIMENT" || true
+"$NOTIFY" "🚀 $TAG Checkpoint directory: $CHECKPOINT_DIR" || true
 
-$NOTIFY "🚀 $TAG started training"
-log "Launching verl.trainer.main_ppo; live training progress follows"
-log "Ray resources: cpus=$RAY_NUM_CPUS object_store_memory=${RAY_OBJECT_STORE_MEMORY}B"
+"$NOTIFY" "Launching verl.trainer.main_ppo; live training progress follows" || true
+"$NOTIFY" "Ray resources: cpus=$RAY_NUM_CPUS object_store_memory=${RAY_OBJECT_STORE_MEMORY}B" || true
 python -m verl.trainer.main_ppo --config-name sdpo \
     "vars.dir=$SDPO_DIR" \
     "vars.task=$TASK" \
@@ -142,5 +136,4 @@ python -m verl.trainer.main_ppo --config-name sdpo \
     "ray_kwargs.ray_init.num_cpus=$RAY_NUM_CPUS" \
     "+ray_kwargs.ray_init.object_store_memory=$RAY_OBJECT_STORE_MEMORY"
 
-log "Training process finished successfully"
-$NOTIFY "✅ $TAG finished successfully"
+"$NOTIFY" "✅ $TAG finished successfully" || true

@@ -13,10 +13,10 @@
 
 set -euo pipefail
 
-NOTIFY=~/bin/slack_notify.py
+NOTIFY="${NOTIFY:-$HOME/bin/slack_notify.py}"
 TAG="$SLURM_JOB_NAME (#$SLURM_JOB_ID) on $(hostname)"
 SDPO_DIR="/scratch/asalem/repos/SDPO"
-ENV_DIR="${SDPO_ENV:-$SDPO_DIR/.venv}"
+ENV_DIR="${SDPO_ENV:-/scratch/asalem/SDPO-venv}"
 DATA_DIR="$SDPO_DIR/datasets/mAceReason-Math-en-es-10"
 MODEL_PATH="suayptalha/Qwen3-0.6B-Math-Expert"
 EXPERIMENT="sdpo-qwen3-06b-math-expert-probe"
@@ -27,7 +27,7 @@ notify_failure() {
     local rc=$?
     trap - ERR
     if ! "$NOTIFY" "❌ $TAG failed with exit code $rc"; then
-        echo "Failed to send failure notification" >&2
+        printf '%s\n' 'Failed to send failure notification' >&2
     fi
     exit "$rc"
 }
@@ -35,22 +35,22 @@ trap notify_failure ERR
 trap '"$NOTIFY" "⚠️ $TAG was terminated" || true; exit 143' TERM
 
 if [[ ! -f "$SDPO_DIR/.env" ]]; then
-    echo "ERROR: .env not found at $SDPO_DIR/.env; set HF_TOKEN in this file." >&2
+    "$NOTIFY" "ERROR: .env not found at $SDPO_DIR/.env; set HF_TOKEN in this file." || true
     exit 1
 fi
 set -a
 source "$SDPO_DIR/.env"
 set +a
 if [[ -z "${HF_TOKEN:-}" ]]; then
-    echo "ERROR: HF_TOKEN is not set in $SDPO_DIR/.env" >&2
+    "$NOTIFY" "ERROR: HF_TOKEN is not set in $SDPO_DIR/.env" || true
     exit 1
 fi
 if [[ ! -f "$DATA_DIR/train.parquet" || ! -f "$DATA_DIR/test.parquet" ]]; then
-    echo "ERROR: prepared probe data is missing from $DATA_DIR" >&2
+    "$NOTIFY" "ERROR: prepared probe data is missing from $DATA_DIR" || true
     exit 1
 fi
 if [[ ! -f "$ENV_DIR/bin/activate" ]]; then
-    echo "ERROR: SDPO environment not found at $ENV_DIR" >&2
+    "$NOTIFY" "ERROR: SDPO environment not found at $ENV_DIR" || true
     exit 1
 fi
 
@@ -68,7 +68,7 @@ source "$ENV_DIR/bin/activate"
 TRITON_GCC="/scicomp/builds/Rocky/8.7/Zen3/software/GCCcore/11.3.0/bin/gcc"
 TRITON_BINUTILS="/scicomp/builds/Rocky/8.7/Zen3/software/binutils/2.38-GCCcore-11.3.0/bin"
 if [[ ! -x "$TRITON_GCC" || ! -x "$TRITON_BINUTILS/as" ]]; then
-    echo "ERROR: Zen3 GCC/binutils required by Triton are unavailable." >&2
+    "$NOTIFY" "ERROR: Zen3 GCC/binutils required by Triton are unavailable." || true
     exit 1
 fi
 export CC="$TRITON_GCC"
@@ -77,11 +77,11 @@ ulimit -c 0
 
 cd "$SDPO_DIR"
 mkdir -p "$CHECKPOINT_DIR" "$HF_HOME" "$HF_DATASETS_CACHE"
-echo "Probe job $TAG"
-echo "Model: $MODEL_PATH"
-echo "Data: $DATA_DIR"
-echo "CUDA_VISIBLE_DEVICES=${CUDA_VISIBLE_DEVICES:-unset}"
-"$NOTIFY" "🚀 $TAG Starting one-step SDPO probe with $MODEL_PATH"
+"$NOTIFY" "Probe job $TAG" || true
+"$NOTIFY" "Model: $MODEL_PATH" || true
+"$NOTIFY" "Data: $DATA_DIR" || true
+"$NOTIFY" "CUDA_VISIBLE_DEVICES=${CUDA_VISIBLE_DEVICES:-unset}" || true
+"$NOTIFY" "🚀 $TAG Starting one-step SDPO probe with $MODEL_PATH" || true
 
 python -m verl.trainer.main_ppo --config-name sdpo \
     "vars.dir=$SDPO_DIR" \
@@ -113,4 +113,4 @@ python -m verl.trainer.main_ppo --config-name sdpo \
     "trainer.default_local_dir=$CHECKPOINT_DIR" \
     "trainer.max_actor_ckpt_to_keep=1"
 
-"$NOTIFY" "✅ $TAG completed the one-step SDPO probe"
+"$NOTIFY" "✅ $TAG completed the one-step SDPO probe" || true

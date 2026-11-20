@@ -48,7 +48,6 @@ from verl.utils.attention_utils import index_first_axis, pad_input, rearrange, u
 from verl.utils.checkpoint.checkpoint_manager import find_latest_ckpt_path, get_checkpoint_tracker_filename
 from verl.utils.checkpoint.fsdp_checkpoint_manager import FSDPCheckpointManager
 from verl.utils.dataset import SFTDataset
-from verl.utils.dataset.multiturn_sft_dataset import MultiTurnSFTDataset
 from verl.utils.device import (
     auto_set_device,
     get_device_id,
@@ -241,7 +240,7 @@ class FSDPSFTTrainer:
                 local_model_path,
                 config=config,
                 torch_dtype=torch_dtype,
-                attn_implementation="flash_attention_2",
+                attn_implementation=self.config.model.get("attn_implementation", "flash_attention_2"),
                 trust_remote_code=trust_remote_code,
             )
 
@@ -859,6 +858,8 @@ def create_sft_dataset(data_paths, data_config, tokenizer, max_samples=-1):
         dataset_cls = load_extern_object(data_config.custom_cls.path, data_config.custom_cls.name)
     # Then check if multi-turn dataset should be used
     elif data_config.get("multiturn", {}).get("enable", False):
+        from verl.utils.dataset.multiturn_sft_dataset import MultiTurnSFTDataset
+
         dataset_cls = MultiTurnSFTDataset
     # Default to single-turn dataset
     else:

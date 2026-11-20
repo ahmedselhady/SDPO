@@ -3,7 +3,7 @@
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=8
-#SBATCH --gres=gpu:4
+#SBATCH --gres=gpu:2
 #SBATCH --mem=100gb
 #SBATCH --time=1-00:00:00
 #SBATCH --output=.slurm/%x.out
@@ -11,20 +11,16 @@
 
 set -euo pipefail
 
-log() {
-    printf '[%s] %s\n' "$(date '+%Y-%m-%d %H:%M:%S %Z')" "$*"
-}
-
-NOTIFY=~/bin/slack_notify.py
+NOTIFY="${NOTIFY:-$HOME/bin/slack_notify.py}"
 TAG="$SLURM_JOB_NAME (#$SLURM_JOB_ID) on $(hostname)"
 # Fires on scancel or time limit (Slurm sends SIGTERM first)
-trap '$NOTIFY "⚠️ $TAG was terminated (cancelled or hit time limit)"; kill $pid 2>/dev/null; exit 143' TERM
+trap '"$NOTIFY" "⚠️ $TAG was terminated (cancelled or hit time limit)" || true; exit 143' TERM
 
 notify_failure() {
     local rc=$?
     trap - ERR
-    if ! $NOTIFY "❌ $TAG failed with exit code $rc"; then
-        echo "Failed to send failure notification" >&2
+    if ! "$NOTIFY" "❌ $TAG failed with exit code $rc"; then
+        printf '%s\n' 'Failed to send failure notification' >&2
     fi
     exit "$rc"
 }
@@ -34,7 +30,7 @@ ROOT_DIR="/scratch/asalem/repos"
 SDPO_DIR="${SDPO_DIR:-$ROOT_DIR/SDPO}"
 DATA_DIR="${DATA_DIR:-$SDPO_DIR/datasets/mAceReason-Math-en-es-10}"
 SOURCE_DATASET="${SOURCE_DATASET:-ahmedselhady/mAceReason-Math}"
-ENV_DIR="${SDPO_ENV:-/scratch/asalem/SDPO-venv}"
+ENV_DIR="/scratch/asalem/SDPO-venv"
 MODEL_PATH="${MODEL_PATH:-nvidia/Nemotron-Research-Reasoning-Qwen-1.5B}"
 EXPERIMENT="${EXPERIMENT:-macereason-math-en-es-10-nemotron-1.5b}"
 CACHE_DIR="${CACHE_DIR:-/scratch/asalem/.cache/huggingface}"
@@ -42,14 +38,14 @@ CHECKPOINT_DIR="${CHECKPOINT_DIR:-$SDPO_DIR/checkpoints/$EXPERIMENT}"
 
 ENV_FILE="$SDPO_DIR/.env"
 if [[ ! -f "$ENV_FILE" ]]; then
-    echo "ERROR: .env not found at $ENV_FILE; set HF_TOKEN in this file." >&2
+    "$NOTIFY" "ERROR: .env not found at $ENV_FILE; set HF_TOKEN in this file." || true
     exit 1
 fi
 set -a
 source "$ENV_FILE"
 set +a
 if [[ -z "${HF_TOKEN:-}" ]]; then
-    echo "ERROR: HF_TOKEN is not set in $ENV_FILE" >&2
+    "$NOTIFY" "ERROR: HF_TOKEN is not set in $ENV_FILE" || true
     exit 1
 fi
 
@@ -65,13 +61,22 @@ RAY_NUM_CPUS="${SLURM_CPUS_PER_TASK:-8}"
 RAY_OBJECT_STORE_MEMORY=$((20 * 1024 * 1024 * 1024))
 
 if [[ ! -f "$ENV_DIR/bin/activate" ]]; then
-    echo "SDPO environment not found at $ENV_DIR" >&2
-    echo "Create it using the setup instructions in SDPO/README.md." >&2
+    "$NOTIFY" "SDPO environment not found at $ENV_DIR" || true
+    "$NOTIFY" "Create it using the setup instructions in SDPO/README.md." || true
     exit 1
 fi
 
 module load CUDA/12.8.0
 source "$ENV_DIR/bin/activate"
+SDPO_PYTHON="$ENV_DIR/bin/python"
+if [[ ! -x "$SDPO_PYTHON" ]] || ! "$SDPO_PYTHON" --version >/dev/null; then
+    "$NOTIFY" "ERROR: $SDPO_PYTHON cannot run on $(hostname)." || true
+    if [[ -L "$SDPO_PYTHON" ]]; then
+        "$NOTIFY" "Python symlink target: $(readlink "$SDPO_PYTHON")" || true
+    fi
+    "$NOTIFY" "Check that the environment's Python interpreter is available on the compute node." || true
+    false
+fi
 # The CUDA job may inherit ROCr's device mask from the cluster environment.
 # verl/Ray rejects it when CUDA_VISIBLE_DEVICES is also set.
 unset ROCR_VISIBLE_DEVICES
@@ -81,7 +86,7 @@ unset ROCR_VISIBLE_DEVICES
 TRITON_GCC="/scicomp/builds/Rocky/8.7/Zen3/software/GCCcore/11.3.0/bin/gcc"
 TRITON_BINUTILS="/scicomp/builds/Rocky/8.7/Zen3/software/binutils/2.38-GCCcore-11.3.0/bin"
 if [[ ! -x "$TRITON_GCC" || ! -x "$TRITON_BINUTILS/as" ]]; then
-    echo "ERROR: Zen3 GCC/binutils required by Triton are unavailable." >&2
+    "$NOTIFY" "ERROR: Zen3 GCC/binutils required by Triton are unavailable." || true
     exit 1
 fi
 export CC="$TRITON_GCC"
@@ -91,27 +96,25 @@ ulimit -c 0
 cd "$SDPO_DIR"
 mkdir -p "$DATA_DIR" "$CHECKPOINT_DIR" "$HF_HOME" "$HF_DATASETS_CACHE"
 
-log "Preparing dataset: source=$SOURCE_DATASET output=$DATA_DIR languages=en,es max_train_groups=10 seed=42"
-$NOTIFY "🚀 $TAG Preparing 10 parallel problem IDs in English and Spanish from $SOURCE_DATASET"
+"$NOTIFY" "Preparing dataset: source=$SOURCE_DATASET output=$DATA_DIR languages=en,es max_train_groups=10 seed=42" || true
 
-python data/prepare_macereason_math.py \
+"$SDPO_PYTHON" data/prepare_macereason_math.py \
     --dataset "$SOURCE_DATASET" \
     --output-dir "$DATA_DIR" \
     --languages en,es \
     --max-train-groups 10 \
     --seed 42
-log "Dataset preparation complete"
+"$NOTIFY" "Dataset preparation complete" || true
 
-$NOTIFY "🚀 $TAG Starting SDPO English/Spanish training (10 steps)"
-$NOTIFY "🚀 $TAG Model: $MODEL_PATH"
-$NOTIFY "🚀 $TAG Data: $DATA_DIR"
-$NOTIFY "🚀 $TAG Experiment: $EXPERIMENT"
-$NOTIFY "🚀 $TAG Checkpoint directory: $CHECKPOINT_DIR"
+"$NOTIFY" "🚀 $TAG Starting SDPO English/Spanish training (10 steps)" || true
+"$NOTIFY" "🚀 $TAG Model: $MODEL_PATH" || true
+"$NOTIFY" "🚀 $TAG Data: $DATA_DIR" || true
+"$NOTIFY" "🚀 $TAG Experiment: $EXPERIMENT" || true
+"$NOTIFY" "🚀 $TAG Checkpoint directory: $CHECKPOINT_DIR" || true
 
-$NOTIFY "🚀 $TAG started training"
-log "Launching verl.trainer.main_ppo; live training progress follows"
-log "Ray resources: cpus=$RAY_NUM_CPUS object_store_memory=${RAY_OBJECT_STORE_MEMORY}B"
-python -m verl.trainer.main_ppo --config-name sdpo \
+"$NOTIFY" "Launching verl.trainer.main_ppo; live training progress follows" || true
+"$NOTIFY" "Ray resources: cpus=$RAY_NUM_CPUS object_store_memory=${RAY_OBJECT_STORE_MEMORY}B" || true
+"$SDPO_PYTHON" -m verl.trainer.main_ppo --config-name sdpo \
     "vars.dir=$SDPO_DIR" \
     "vars.task=$TASK" \
     "data.train_files=[$DATA_DIR/train.parquet]" \
@@ -139,5 +142,4 @@ python -m verl.trainer.main_ppo --config-name sdpo \
     "ray_kwargs.ray_init.num_cpus=$RAY_NUM_CPUS" \
     "+ray_kwargs.ray_init.object_store_memory=$RAY_OBJECT_STORE_MEMORY"
 
-log "Training process finished successfully"
-$NOTIFY "✅ $TAG finished successfully"
+"$NOTIFY" "✅ $TAG finished successfully" || true
