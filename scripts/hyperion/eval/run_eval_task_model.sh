@@ -4,11 +4,9 @@
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=8
 #SBATCH --gres=gpu:1
-#SBATCH --constraint=a100-sxm4
-#SBATCH --mem=64gb
-#SBATCH --time=2-00:00:00
-#SBATCH --mail-user=ahmed.salemmohamed@ehu.eus
-#SBATCH --mail-type=FAIL
+#SBATCH --constraint=a100
+#SBATCH --mem=48gb
+#SBATCH --time=3-00:00:00
 #SBATCH --output=.slurm/%x-%A_%a.out
 #SBATCH --error=.slurm/%x-%A_%a.err
 
@@ -57,6 +55,11 @@ export RAY_ENABLE_UV_RUN_RUNTIME_ENV=0
 export PYTHONUNBUFFERED=1
 export HF_HOME="${HF_HOME:-/scratch/asalem/.cache/huggingface}"
 export HF_DATASETS_CACHE="${HF_DATASETS_CACHE:-$HF_HOME/datasets}"
+if [[ -n "${EVAL_HF_CACHE:-}" ]]; then
+    export HF_HUB_CACHE="$EVAL_HF_CACHE/hub"
+    export HF_XET_CACHE="$EVAL_HF_CACHE/xet"
+    unset TRANSFORMERS_CACHE PYTORCH_TRANSFORMERS_CACHE PYTORCH_PRETRAINED_BERT_CACHE
+fi
 
 module load CUDA/12.8.0
 
