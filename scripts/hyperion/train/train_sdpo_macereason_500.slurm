@@ -2,7 +2,7 @@
 #SBATCH --job-name=mace500-sdpo
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
-#SBATCH --cpus-per-task=8
+#SBATCH --cpus-per-task=16
 #SBATCH --gres=gpu:4
 #SBATCH --mem=100gb
 #SBATCH --time=1-00:00:00
@@ -36,7 +36,8 @@ if [[ ! "$MAX_TRAIN_GROUPS" =~ ^([2-9]|[1-9][0-9]+)$ ]]; then
 fi
 DATA_DIR="${DATA_DIR:-$SDPO_DIR/datasets/mAceReason-Math-${MAX_TRAIN_GROUPS}x14}"
 SOURCE_DATASET="${SOURCE_DATASET:-ahmedselhady/mAceReason-Math}"
-ENV_DIR="${SDPO_ENV:-/scratch/asalem/SDPO-venv}"
+CONTAINER_IMAGE="${SDPO_CONTAINER_IMAGE:-/scratch/asalem/SDPO-qwen35-vllm-0.19.1.sif}"
+CONTAINER_ENV="${SDPO_CONTAINER_ENV:-/scratch/asalem/SDPO-qwen35-container-venv}"
 MODEL_PATH="${MODEL_PATH:-Qwen/Qwen3.5-2B}"
 EXPERIMENT="${EXPERIMENT:-macereason-math-${MAX_TRAIN_GROUPS}x14-qwen-3.5-2b}"
 CACHE_DIR="${CACHE_DIR:-/scratch/asalem/.cache/huggingface}"
@@ -63,28 +64,37 @@ export HF_HOME="$CACHE_DIR"
 export HF_DATASETS_CACHE="$HF_HOME/datasets"
 export VLLM_USE_V1=1
 export PYTHONUNBUFFERED=1
-RAY_NUM_CPUS="${SLURM_CPUS_PER_TASK:-8}"
+# Ray needs 12 CPUs for the four GPU workers, plus CPUs for the trainer.
+RAY_NUM_CPUS="${SLURM_CPUS_PER_TASK:-16}"
 RAY_OBJECT_STORE_MEMORY=$((20 * 1024 * 1024 * 1024))
 DATALOADER_NUM_WORKERS="${DATALOADER_NUM_WORKERS:-0}"
 
-if [[ ! -f "$ENV_DIR/bin/activate" ]]; then
-    "$NOTIFY" "SDPO environment not found at $ENV_DIR" || true
-    "$NOTIFY" "Create it using the setup instructions in SDPO/README.md." || true
-    exit 1
-fi
-
-module load CUDA/12.8.0
-source "$ENV_DIR/bin/activate"
 # The CUDA job may inherit ROCr's device mask from the cluster environment.
 # verl/Ray rejects it when CUDA_VISIBLE_DEVICES is also set.
 unset ROCR_VISIBLE_DEVICES
-# Use the system toolchain to build Triton's CUDA helper.
-if [[ ! -x /usr/bin/gcc || ! -x /usr/bin/as || ! -x /usr/bin/ld ]]; then
-    printf '%s\n' 'ERROR: System GCC/binutils required by Triton are unavailable.' >&2
-    exit 1
+if [[ -n "${SDPO_ENV:-}" ]]; then
+    if [[ ! -f "$SDPO_ENV/bin/activate" ]]; then
+        printf 'ERROR: SDPO environment not found at %s\n' "$SDPO_ENV" >&2
+        exit 1
+    fi
+    module load CUDA/12.8.0
+    source "$SDPO_ENV/bin/activate"
+    export CC=/usr/bin/gcc
+    export PATH="$SDPO_ENV/bin:/usr/bin:/bin:$PATH"
+    python_cmd=(python)
+else
+    if [[ ! -r "$CONTAINER_IMAGE" || ! -f "$CONTAINER_ENV/pyvenv.cfg" ]]; then
+        printf 'ERROR: Qwen3.5 runtime requires %s and the Python environment at %s.\n' "$CONTAINER_IMAGE" "$CONTAINER_ENV" >&2
+        exit 1
+    fi
+    # Hyperion's host glibc is older than the vLLM wheel requires.
+    module load Apptainer/1.4.5
+    python_cmd=(
+        apptainer exec --nv --bind /scratch
+        --env CUDA_HOME=/usr/local/cuda,CC=/usr/bin/gcc
+        "$CONTAINER_IMAGE" "$CONTAINER_ENV/bin/python"
+    )
 fi
-export CC=/usr/bin/gcc
-export PATH="$ENV_DIR/bin:/usr/bin:/bin:$PATH"
 ulimit -c 0
 
 cd "$SDPO_DIR"
@@ -92,7 +102,7 @@ mkdir -p "$DATA_DIR" "$CHECKPOINT_DIR" "$HF_HOME" "$HF_DATASETS_CACHE"
 
 "$NOTIFY" "Preparing dataset: source=$SOURCE_DATASET output=$DATA_DIR max_train_groups=$MAX_TRAIN_GROUPS seed=42" || true
 
-python data/prepare_macereason_math.py \
+"${python_cmd[@]}" data/prepare_macereason_math.py \
     --dataset "$SOURCE_DATASET" \
     --output-dir "$DATA_DIR" \
     --max-train-groups "$MAX_TRAIN_GROUPS" \
@@ -107,7 +117,7 @@ python data/prepare_macereason_math.py \
 
 "$NOTIFY" "Launching verl.trainer.main_ppo; live training progress follows" || true
 "$NOTIFY" "Ray resources: cpus=$RAY_NUM_CPUS object_store_memory=${RAY_OBJECT_STORE_MEMORY}B" || true
-python -m verl.trainer.main_ppo --config-name sdpo \
+"${python_cmd[@]}" -m verl.trainer.main_ppo --config-name sdpo \
     "vars.dir=$SDPO_DIR" \
     "vars.task=$TASK" \
     "data.train_files=[$DATA_DIR/train.parquet]" \

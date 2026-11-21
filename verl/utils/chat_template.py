@@ -18,10 +18,10 @@ def initialize_system_prompt(tokenizer, **apply_chat_template_kwargs) -> list[in
         List of token IDs for the system prompt, or empty list if not supported
     """
     token1 = tokenizer.apply_chat_template(
-        [{"role": "user", "content": ""}], add_generation_prompt=False, tokenize=True
+        [{"role": "user", "content": ""}], add_generation_prompt=False, tokenize=True, return_dict=False
     )
     token2 = tokenizer.apply_chat_template(
-        [{"role": "user", "content": ""}] * 2, add_generation_prompt=False, tokenize=True
+        [{"role": "user", "content": ""}] * 2, add_generation_prompt=False, tokenize=True, return_dict=False
     )
     # get system prompt tokens
     system_prompt = token1[: -(len(token2) - len(token1))]

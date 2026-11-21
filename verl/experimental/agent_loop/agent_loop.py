@@ -678,6 +678,8 @@ class AgentLoopWorker:
 
         image_grid_thw = multi_modal_inputs.get("image_grid_thw")
         video_grid_thw = multi_modal_inputs.get("video_grid_thw")
+        if self.processor.config.model_type == "qwen3_5" and image_grid_thw is None and video_grid_thw is None:
+            return compute_position_id_with_mask(attention_mask)
 
         # Model's get_rope_index has been dynamically bind to the processor.
         vision_position_ids, _ = self.processor.get_rope_index(
