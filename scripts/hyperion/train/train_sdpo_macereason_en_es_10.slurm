@@ -65,6 +65,8 @@ export VLLM_USE_V1=1
 export PYTHONUNBUFFERED=1
 RAY_NUM_CPUS="${SLURM_CPUS_PER_TASK:-8}"
 RAY_OBJECT_STORE_MEMORY=$((20 * 1024 * 1024 * 1024))
+# Run loading in the trainer process by default to avoid worker teardown errors.
+DATALOADER_NUM_WORKERS="${DATALOADER_NUM_WORKERS:-0}"
 
 if [[ ! -f "$ENV_DIR/bin/activate" ]]; then
     fail "ERROR: SDPO environment not found at $ENV_DIR. See the setup instructions in SDPO/README.md."
@@ -82,16 +84,13 @@ fi
 # The CUDA job may inherit ROCr's device mask from the cluster environment.
 # verl/Ray rejects it when CUDA_VISIBLE_DEVICES is also set.
 unset ROCR_VISIBLE_DEVICES
-# A100 nodes in hitz-exclusive use AMD EPYC 75F3 (Zen 3) CPUs.
-# Triton builds a small CUDA helper with the host C compiler on first use;
-# keep the compiler and assembler matched to the node CPU family.
-TRITON_GCC="/scicomp/builds/Rocky/8.7/Zen3/software/GCCcore/11.3.0/bin/gcc"
-TRITON_BINUTILS="/scicomp/builds/Rocky/8.7/Zen3/software/binutils/2.38-GCCcore-11.3.0/bin"
-if [[ ! -x "$TRITON_GCC" || ! -x "$TRITON_BINUTILS/as" ]]; then
-    fail "ERROR: Zen3 GCC/binutils required by Triton are unavailable."
+# Triton compiles a CUDA helper on first use. The Zen3 assembler crashes
+# on hyperion-256, where the system GCC and binutils build the helper.
+if [[ ! -x /usr/bin/gcc || ! -x /usr/bin/as || ! -x /usr/bin/ld ]]; then
+    fail "ERROR: System GCC/binutils required by Triton are unavailable."
 fi
-export CC="$TRITON_GCC"
-export PATH="$TRITON_BINUTILS:$PATH"
+export CC=/usr/bin/gcc
+export PATH="$ENV_DIR/bin:/usr/bin:/bin:$PATH"
 ulimit -c 0
 
 cd "$SDPO_DIR"
@@ -121,10 +120,12 @@ mkdir -p "$DATA_DIR" "$CHECKPOINT_DIR" "$HF_HOME" "$HF_DATASETS_CACHE"
     "data.train_files=[$DATA_DIR/train.parquet]" \
     "data.val_files=[$DATA_DIR/test.parquet]" \
     "data.train_batch_size=2" \
+    "data.dataloader_num_workers=$DATALOADER_NUM_WORKERS" \
     "data.parallel_group_batching.enabled=True" \
     "data.parallel_group_batching.group_key=parallel_id" \
     "actor_rollout_ref.model.path=$MODEL_PATH" \
     "+actor_rollout_ref.model.override_config.attn_implementation=sdpa" \
+    "actor_rollout_ref.model.use_remove_padding=False" \
     "actor_rollout_ref.rollout.n=8" \
     "actor_rollout_ref.actor.ppo_mini_batch_size=2" \
     "trainer.project_name=SDPO-multilingual" \

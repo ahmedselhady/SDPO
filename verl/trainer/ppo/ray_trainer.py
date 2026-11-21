@@ -1709,7 +1709,7 @@ class RayPPOTrainer:
                 is_last_step = self.global_steps >= self.total_training_steps
                 with marked_timer("step", timing_raw):
                     # generate a batch
-                    response_count = gen_batch_output.batch.batch_size[0]
+                    response_count = len(gen_batch_output)
                     log_training_event(f"step={self.global_steps} generating {response_count} responses")
                     with marked_timer("gen", timing_raw, color="red"):
                         if not self.async_rollout_mode:

@@ -1,18 +1,13 @@
 #!/bin/bash
 #SBATCH --job-name=mace500-sdpo
-#SBATCH --partition=hitz-exclusive
-#SBATCH --account=hitz-exclusive
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=8
 #SBATCH --gres=gpu:4
-#SBATCH --constraint=a100-sxm4
-#SBATCH --mem=64gb
+#SBATCH --mem=100gb
 #SBATCH --time=1-00:00:00
-#SBATCH --mail-user=ahmed.salemmohamed@ehu.eus
-#SBATCH --mail-type=FAIL
-#SBATCH --output=.slurm/%x.out
-#SBATCH --error=.slurm/%x.err
+#SBATCH --output=/scratch/asalem/repos/SDPO/.slurm/%x-%j.out
+#SBATCH --error=/scratch/asalem/repos/SDPO/.slurm/%x-%j.err
 
 set -euo pipefail
 
@@ -33,11 +28,17 @@ trap notify_failure ERR
 
 ROOT_DIR="/scratch/asalem/repos"
 SDPO_DIR="${SDPO_DIR:-$ROOT_DIR/SDPO}"
-DATA_DIR="${DATA_DIR:-$SDPO_DIR/datasets/mAceReason-Math-500x14}"
+# Each parallel group contains one example per language. A batch needs two groups.
+MAX_TRAIN_GROUPS="${MAX_TRAIN_GROUPS:-500}"
+if [[ ! "$MAX_TRAIN_GROUPS" =~ ^([2-9]|[1-9][0-9]+)$ ]]; then
+    printf '%s\n' 'ERROR: MAX_TRAIN_GROUPS must be an integer of at least 2.' >&2
+    exit 1
+fi
+DATA_DIR="${DATA_DIR:-$SDPO_DIR/datasets/mAceReason-Math-${MAX_TRAIN_GROUPS}x14}"
 SOURCE_DATASET="${SOURCE_DATASET:-ahmedselhady/mAceReason-Math}"
 ENV_DIR="${SDPO_ENV:-/scratch/asalem/SDPO-venv}"
-MODEL_PATH="${MODEL_PATH:-nvidia/Nemotron-Research-Reasoning-Qwen-1.5B}"
-EXPERIMENT="${EXPERIMENT:-macereason-math-500x14-nemotron-1.5b}"
+MODEL_PATH="${MODEL_PATH:-Qwen/Qwen3.5-2B}"
+EXPERIMENT="${EXPERIMENT:-macereason-math-${MAX_TRAIN_GROUPS}x14-qwen-3.5-2b}"
 CACHE_DIR="${CACHE_DIR:-/scratch/asalem/.cache/huggingface}"
 CHECKPOINT_DIR="${CHECKPOINT_DIR:-$SDPO_DIR/checkpoints/$EXPERIMENT}"
 
@@ -55,7 +56,7 @@ if [[ -z "${HF_TOKEN:-}" ]]; then
 fi
 
 export USER="${USER:-$(id -un)}"
-export TASK="mAceReason-Math-500x14"
+export TASK="mAceReason-Math-${MAX_TRAIN_GROUPS}x14"
 export EXPERIMENT
 export RAY_ENABLE_UV_RUN_RUNTIME_ENV=0
 export HF_HOME="$CACHE_DIR"
@@ -64,6 +65,7 @@ export VLLM_USE_V1=1
 export PYTHONUNBUFFERED=1
 RAY_NUM_CPUS="${SLURM_CPUS_PER_TASK:-8}"
 RAY_OBJECT_STORE_MEMORY=$((20 * 1024 * 1024 * 1024))
+DATALOADER_NUM_WORKERS="${DATALOADER_NUM_WORKERS:-0}"
 
 if [[ ! -f "$ENV_DIR/bin/activate" ]]; then
     "$NOTIFY" "SDPO environment not found at $ENV_DIR" || true
@@ -76,28 +78,24 @@ source "$ENV_DIR/bin/activate"
 # The CUDA job may inherit ROCr's device mask from the cluster environment.
 # verl/Ray rejects it when CUDA_VISIBLE_DEVICES is also set.
 unset ROCR_VISIBLE_DEVICES
-# A100 nodes in hitz-exclusive use AMD EPYC 75F3 (Zen 3) CPUs.
-# Triton builds a small CUDA helper with the host C compiler on first use;
-# keep the compiler and assembler matched to the node CPU family.
-TRITON_GCC="/scicomp/builds/Rocky/8.7/Zen3/software/GCCcore/11.3.0/bin/gcc"
-TRITON_BINUTILS="/scicomp/builds/Rocky/8.7/Zen3/software/binutils/2.38-GCCcore-11.3.0/bin"
-if [[ ! -x "$TRITON_GCC" || ! -x "$TRITON_BINUTILS/as" ]]; then
-    "$NOTIFY" "ERROR: Zen3 GCC/binutils required by Triton are unavailable." || true
+# Use the system toolchain to build Triton's CUDA helper.
+if [[ ! -x /usr/bin/gcc || ! -x /usr/bin/as || ! -x /usr/bin/ld ]]; then
+    printf '%s\n' 'ERROR: System GCC/binutils required by Triton are unavailable.' >&2
     exit 1
 fi
-export CC="$TRITON_GCC"
-export PATH="$TRITON_BINUTILS:$PATH"
+export CC=/usr/bin/gcc
+export PATH="$ENV_DIR/bin:/usr/bin:/bin:$PATH"
 ulimit -c 0
 
 cd "$SDPO_DIR"
 mkdir -p "$DATA_DIR" "$CHECKPOINT_DIR" "$HF_HOME" "$HF_DATASETS_CACHE"
 
-"$NOTIFY" "Preparing dataset: source=$SOURCE_DATASET output=$DATA_DIR max_train_groups=500 seed=42" || true
+"$NOTIFY" "Preparing dataset: source=$SOURCE_DATASET output=$DATA_DIR max_train_groups=$MAX_TRAIN_GROUPS seed=42" || true
 
 python data/prepare_macereason_math.py \
     --dataset "$SOURCE_DATASET" \
     --output-dir "$DATA_DIR" \
-    --max-train-groups 500 \
+    --max-train-groups "$MAX_TRAIN_GROUPS" \
     --seed 42
 "$NOTIFY" "Dataset preparation complete" || true
 
@@ -115,17 +113,19 @@ python -m verl.trainer.main_ppo --config-name sdpo \
     "data.train_files=[$DATA_DIR/train.parquet]" \
     "data.val_files=[$DATA_DIR/test.parquet]" \
     "data.train_batch_size=28" \
+    "data.dataloader_num_workers=$DATALOADER_NUM_WORKERS" \
     "data.parallel_group_batching.enabled=True" \
     "data.parallel_group_batching.group_key=parallel_id" \
     "actor_rollout_ref.model.path=$MODEL_PATH" \
     "+actor_rollout_ref.model.override_config.attn_implementation=sdpa" \
+    "actor_rollout_ref.model.use_remove_padding=False" \
     "actor_rollout_ref.rollout.n=8" \
     "actor_rollout_ref.actor.ppo_mini_batch_size=28" \
     "trainer.project_name=SDPO-multilingual" \
-    "trainer.group_name=macereason-math-500" \
+    "trainer.group_name=macereason-math-$MAX_TRAIN_GROUPS" \
     "trainer.experiment_name=$EXPERIMENT" \
     "trainer.nnodes=1" \
-    "trainer.n_gpus_per_node=2" \
+    "trainer.n_gpus_per_node=4" \
     "trainer.total_epochs=1" \
     "trainer.save_freq=100" \
     "trainer.test_freq=-1" \

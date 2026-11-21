@@ -3,7 +3,7 @@
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=8
-#SBATCH --gres=gpu:2
+#SBATCH --gres=gpu:1
 #SBATCH --mem=100gb
 #SBATCH --time=1-00:00:00
 #SBATCH --mail-user=ahmed.salemmohamed@ehu.eus
@@ -62,17 +62,18 @@ export HF_HOME="$CACHE_DIR"
 export HF_DATASETS_CACHE="$HF_HOME/datasets"
 export VLLM_USE_V1=1
 export PYTHONUNBUFFERED=1
+DATALOADER_NUM_WORKERS="${DATALOADER_NUM_WORKERS:-0}"
 
 module load CUDA/12.8.0
 source "$ENV_DIR/bin/activate"
-TRITON_GCC="/scicomp/builds/Rocky/8.7/Zen3/software/GCCcore/11.3.0/bin/gcc"
-TRITON_BINUTILS="/scicomp/builds/Rocky/8.7/Zen3/software/binutils/2.38-GCCcore-11.3.0/bin"
-if [[ ! -x "$TRITON_GCC" || ! -x "$TRITON_BINUTILS/as" ]]; then
-    "$NOTIFY" "ERROR: Zen3 GCC/binutils required by Triton are unavailable." || true
+unset ROCR_VISIBLE_DEVICES
+# Use the system toolchain to build Triton's CUDA helper.
+if [[ ! -x /usr/bin/gcc || ! -x /usr/bin/as || ! -x /usr/bin/ld ]]; then
+    printf '%s\n' 'ERROR: System GCC/binutils required by Triton are unavailable.' >&2
     exit 1
 fi
-export CC="$TRITON_GCC"
-export PATH="$TRITON_BINUTILS:$PATH"
+export CC=/usr/bin/gcc
+export PATH="$ENV_DIR/bin:/usr/bin:/bin:$PATH"
 ulimit -c 0
 
 cd "$SDPO_DIR"
@@ -89,13 +90,17 @@ python -m verl.trainer.main_ppo --config-name sdpo \
     "data.train_files=[$DATA_DIR/train.parquet]" \
     "data.val_files=[$DATA_DIR/test.parquet]" \
     "data.train_batch_size=2" \
+    "data.dataloader_num_workers=$DATALOADER_NUM_WORKERS" \
     "data.max_prompt_length=2048" \
     "data.max_response_length=1024" \
     "data.parallel_group_batching.enabled=True" \
     "data.parallel_group_batching.group_key=parallel_id" \
     "max_model_len=8192" \
     "actor_rollout_ref.model.path=$MODEL_PATH" \
+    "+actor_rollout_ref.model.override_config.attn_implementation=sdpa" \
+    "actor_rollout_ref.model.use_remove_padding=False" \
     "actor_rollout_ref.rollout.n=1" \
+    "actor_rollout_ref.rollout.tensor_model_parallel_size=1" \
     "actor_rollout_ref.rollout.max_model_len=8192" \
     "actor_rollout_ref.actor.ppo_mini_batch_size=2" \
     "actor_rollout_ref.actor.self_distillation.max_reprompt_len=4096" \
