@@ -644,6 +644,9 @@ class AgentLoopWorker:
 
         images = output.multi_modal_data.get("images")
         videos = output.multi_modal_data.get("videos")
+        if self.processor.config.model_type == "qwen3_5" and not images and not videos:
+            return multi_modal_inputs
+
         # split the videos and according metadatas
         if videos is not None:
             videos, video_metadatas = zip(*videos, strict=False)

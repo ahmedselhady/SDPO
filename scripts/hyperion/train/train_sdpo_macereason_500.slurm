@@ -129,6 +129,7 @@ mkdir -p "$DATA_DIR" "$CHECKPOINT_DIR" "$HF_HOME" "$HF_DATASETS_CACHE"
     "actor_rollout_ref.model.path=$MODEL_PATH" \
     "+actor_rollout_ref.model.override_config.attn_implementation=sdpa" \
     "actor_rollout_ref.model.use_remove_padding=False" \
+    "actor_rollout_ref.rollout.tensor_model_parallel_size=1" \
     "actor_rollout_ref.rollout.n=8" \
     "actor_rollout_ref.actor.ppo_mini_batch_size=28" \
     "trainer.project_name=SDPO-multilingual" \

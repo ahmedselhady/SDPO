@@ -235,10 +235,15 @@ class vLLMAsyncRollout(BaseRollout):
     async def _execute_method(self, method: str | bytes, *args, **kwargs):
         if method == "init_worker":
             return self._init_worker(*args, **kwargs)
-        elif method == "load_model":
+        if method == "load_model":
             return self._load_model(*args, **kwargs)
-        else:
+        if hasattr(WorkerWrapperBase, "execute_method"):
             return self.inference_engine.execute_method(method, *args, **kwargs)
+
+        # Newer vLLM executors use this dispatcher for both names and serialized callables.
+        from vllm.v1.serial_utils import run_method
+
+        return run_method(self.inference_engine, method, args, kwargs)
 
     async def resume(self, tags: list[str]):
         """Resume rollout weights or kv cache in GPU memory.
