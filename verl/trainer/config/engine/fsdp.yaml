@@ -32,6 +32,9 @@ forward_prefetch: False
 # model dtype of fsdp
 model_dtype: fp32
 
+# Use meta initialization on non-loading ranks when the model supports it.
+use_meta_init: true
+
 # Whether to use original parameters in fsdp. Only avaiable in fsdp1
 use_orig_params: false
 

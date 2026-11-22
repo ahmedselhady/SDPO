@@ -292,6 +292,7 @@ class AgentLoopBase(ABC):
             )
             prompt_ids = model_inputs.pop("input_ids").squeeze(0).tolist()
         else:
+            apply_kwargs = {**self.apply_chat_template_kwargs, "return_dict": False}
             prompt_ids = await self.loop.run_in_executor(
                 None,
                 lambda: self.tokenizer.apply_chat_template(
@@ -299,7 +300,7 @@ class AgentLoopBase(ABC):
                     tools=tools,
                     add_generation_prompt=True,
                     tokenize=True,
-                    **self.apply_chat_template_kwargs,
+                    **apply_kwargs,
                 ),
             )
 

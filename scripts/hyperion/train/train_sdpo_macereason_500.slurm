@@ -34,14 +34,47 @@ if [[ ! "$MAX_TRAIN_GROUPS" =~ ^([2-9]|[1-9][0-9]+)$ ]]; then
     printf '%s\n' 'ERROR: MAX_TRAIN_GROUPS must be an integer of at least 2.' >&2
     exit 1
 fi
-DATA_DIR="${DATA_DIR:-$SDPO_DIR/datasets/mAceReason-Math-${MAX_TRAIN_GROUPS}x14}"
+# Use comma-separated language codes.
+DEFAULT_LANGUAGES="bn,en,es,te,th,zh" # "bn,de,en,es,fr,it,ja,ko,pt,ru,sw,te,th,zh"
+dataset_languages="${LANGUAGES-$DEFAULT_LANGUAGES}"
+if [[ ! "$dataset_languages" =~ ^[a-z]{2,3}(,[a-z]{2,3})*$ ]]; then
+    printf '%s\n' 'ERROR: LANGUAGES must be comma-separated lowercase language codes.' >&2
+    exit 1
+fi
+IFS=, read -r -a language_codes <<< "$dataset_languages"
+seen_languages=","
+for language in "${language_codes[@]}"; do
+    if [[ "$seen_languages" == *",$language,"* ]]; then
+        printf 'ERROR: duplicate language code %s.\n' "$language" >&2
+        exit 1
+    fi
+    seen_languages+="$language,"
+done
+
+# Use en to prefer successful English references, or any to use any successful language.
+reference_language="${SOLUTION_REFERENCE_LANGUAGE-en}"
+case "$reference_language" in
+    en|any) ;;
+    *)
+        printf '%s\n' 'ERROR: SOLUTION_REFERENCE_LANGUAGE must be en or any.' >&2
+        exit 1
+        ;;
+esac
+
+# Keep two complete parallel groups in each training batch.
+TRAIN_BATCH_SIZE=$((2 * ${#language_codes[@]}))
+DATASET_TAG="${MAX_TRAIN_GROUPS}x${#language_codes[@]}"
+if [[ "$dataset_languages" != "$DEFAULT_LANGUAGES" ]]; then
+    DATASET_TAG+="-${dataset_languages//,/-}"
+fi
+DATA_DIR="${DATA_DIR:-$SDPO_DIR/datasets/mAceReason-Math-$DATASET_TAG}"
 SOURCE_DATASET="${SOURCE_DATASET:-ahmedselhady/mAceReason-Math}"
 CONTAINER_IMAGE="${SDPO_CONTAINER_IMAGE:-/scratch/asalem/SDPO-qwen35-vllm-0.19.1.sif}"
 CONTAINER_ENV="${SDPO_CONTAINER_ENV:-/scratch/asalem/SDPO-qwen35-container-venv}"
-MODEL_PATH="${MODEL_PATH:-Qwen/Qwen3.5-2B}"
-EXPERIMENT="${EXPERIMENT:-macereason-math-${MAX_TRAIN_GROUPS}x14-qwen-3.5-2b}"
+MODEL_PATH="${MODEL_PATH:-nvidia/Nemotron-Research-Reasoning-Qwen-1.5B}"
+EXPERIMENT="${EXPERIMENT:-macereason-math-${DATASET_TAG}-nemotron-1.5b}"
 CACHE_DIR="${CACHE_DIR:-/scratch/asalem/.cache/huggingface}"
-CHECKPOINT_DIR="${CHECKPOINT_DIR:-$SDPO_DIR/checkpoints/$EXPERIMENT}"
+CHECKPOINT_DIR="${CHECKPOINT_DIR:-$SDPO_DIR/checkpoints/$EXPERIMENT-$reference_language}"
 
 ENV_FILE="$SDPO_DIR/.env"
 if [[ ! -f "$ENV_FILE" ]]; then
@@ -57,7 +90,7 @@ if [[ -z "${HF_TOKEN:-}" ]]; then
 fi
 
 export USER="${USER:-$(id -un)}"
-export TASK="mAceReason-Math-${MAX_TRAIN_GROUPS}x14"
+export TASK="mAceReason-Math-${DATASET_TAG}"
 export EXPERIMENT
 export RAY_ENABLE_UV_RUN_RUNTIME_ENV=0
 export HF_HOME="$CACHE_DIR"
@@ -84,7 +117,7 @@ if [[ -n "${SDPO_ENV:-}" ]]; then
     python_cmd=(python)
 else
     if [[ ! -r "$CONTAINER_IMAGE" || ! -f "$CONTAINER_ENV/pyvenv.cfg" ]]; then
-        printf 'ERROR: Qwen3.5 runtime requires %s and the Python environment at %s.\n' "$CONTAINER_IMAGE" "$CONTAINER_ENV" >&2
+        printf 'ERROR: The container runtime requires %s and the Python environment at %s.\n' "$CONTAINER_IMAGE" "$CONTAINER_ENV" >&2
         exit 1
     fi
     # Hyperion's host glibc is older than the vLLM wheel requires.
@@ -100,11 +133,12 @@ ulimit -c 0
 cd "$SDPO_DIR"
 mkdir -p "$DATA_DIR" "$CHECKPOINT_DIR" "$HF_HOME" "$HF_DATASETS_CACHE"
 
-"$NOTIFY" "Preparing dataset: source=$SOURCE_DATASET output=$DATA_DIR max_train_groups=$MAX_TRAIN_GROUPS seed=42" || true
+"$NOTIFY" "Preparing dataset: source=$SOURCE_DATASET output=$DATA_DIR max_train_groups=$MAX_TRAIN_GROUPS languages=$dataset_languages seed=42" || true
 
 "${python_cmd[@]}" data/prepare_macereason_math.py \
     --dataset "$SOURCE_DATASET" \
     --output-dir "$DATA_DIR" \
+    --languages "$dataset_languages" \
     --max-train-groups "$MAX_TRAIN_GROUPS" \
     --seed 42
 "$NOTIFY" "Dataset preparation complete" || true
@@ -122,23 +156,26 @@ mkdir -p "$DATA_DIR" "$CHECKPOINT_DIR" "$HF_HOME" "$HF_DATASETS_CACHE"
     "vars.task=$TASK" \
     "data.train_files=[$DATA_DIR/train.parquet]" \
     "data.val_files=[$DATA_DIR/test.parquet]" \
-    "data.train_batch_size=28" \
+    "data.train_batch_size=$TRAIN_BATCH_SIZE" \
     "data.dataloader_num_workers=$DATALOADER_NUM_WORKERS" \
     "data.parallel_group_batching.enabled=True" \
     "data.parallel_group_batching.group_key=parallel_id" \
     "actor_rollout_ref.model.path=$MODEL_PATH" \
     "+actor_rollout_ref.model.override_config.attn_implementation=sdpa" \
     "actor_rollout_ref.model.use_remove_padding=False" \
+    "actor_rollout_ref.actor.fsdp_config.use_meta_init=False" \
+    "actor_rollout_ref.ref.fsdp_config.use_meta_init=False" \
     "actor_rollout_ref.rollout.tensor_model_parallel_size=1" \
     "actor_rollout_ref.rollout.n=8" \
-    "actor_rollout_ref.actor.ppo_mini_batch_size=28" \
+    "actor_rollout_ref.actor.ppo_mini_batch_size=$TRAIN_BATCH_SIZE" \
+    "actor_rollout_ref.actor.self_distillation.solution_reference_language=$reference_language" \
     "trainer.project_name=SDPO-multilingual" \
     "trainer.group_name=macereason-math-$MAX_TRAIN_GROUPS" \
     "trainer.experiment_name=$EXPERIMENT" \
     "trainer.nnodes=1" \
     "trainer.n_gpus_per_node=4" \
     "trainer.total_epochs=1" \
-    "trainer.save_freq=100" \
+    "trainer.save_freq=25" \
     "trainer.test_freq=-1" \
     "trainer.val_before_train=False" \
     "trainer.resume_mode=disable" \

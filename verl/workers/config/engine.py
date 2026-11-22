@@ -150,6 +150,7 @@ class FSDPEngineConfig(EngineConfig):
         fsdp_size (int): FSDP group size. -1 means use all available GPUs.
         forward_prefetch (bool): Whether to prefetch parameters for next forward pass, default False
         model_dtype (str): Model data type used to initialize the transformers model. default "fp32"
+        use_meta_init (bool): Allow meta-device initialization on non-loading ranks.
         use_orig_params (bool): Whether to use original parameters when initialize FSDP1, default False
         seed (int): Random seed for reproducibility.
         full_determinism (bool): If true, enable_full_determinism is called to ensure reproducible results
@@ -169,6 +170,7 @@ class FSDPEngineConfig(EngineConfig):
     fsdp_size: int = -1
     forward_prefetch: bool = False
     model_dtype: str = "fp32"
+    use_meta_init: bool = True
     use_orig_params: bool = False
     mixed_precision: Optional[dict[str, Any]] = None
     ulysses_sequence_parallel_size: int = 1

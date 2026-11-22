@@ -20,6 +20,7 @@ This trainer supports model-agonistic model initialization with huggingface
 
 import json
 import os
+import random
 import re
 import time
 import uuid
@@ -671,36 +672,28 @@ class RayPPOTrainer:
         response_texts: list[str],
         dont_reprompt_on_self_success: bool = False,
         remove_thinking_from_demonstration: bool = False,
-        languages=None,
-        preferred_languages: Optional[list[str]] = None,
-    ) -> Optional[str]:
+        english_by_group=None,
+        reference_language: str = "any",
+    ) -> tuple[Optional[str], bool]:
         uid = uids[idx]
         solution_idxs = success_by_uid[uid]
+        english_idxs = english_by_group.get(uid, []) if english_by_group is not None else []
         if dont_reprompt_on_self_success:
             solution_idxs = [j for j in solution_idxs if j != idx]
-        if len(solution_idxs) == 0:
-            return None
-        if languages is not None and preferred_languages:
-            def language_matches(language, preferred):
-                language = str(language).strip().lower().replace("_", "-")
-                preferred = str(preferred).strip().lower().replace("_", "-")
-                if language == "english":
-                    language = "en"
-                if preferred == "english":
-                    preferred = "en"
-                return language == preferred or language.startswith(preferred + "-")
+            english_idxs = [j for j in english_idxs if j != idx]
 
-            preferred_idxs = [
-                j for preferred in preferred_languages
-                for j in solution_idxs if language_matches(languages[j], preferred)
-            ]
-            if preferred_idxs:
-                solution_idxs = preferred_idxs
-        solution_idx = solution_idxs[0]
+        successful = bool(solution_idxs)
+        if successful:
+            english_successes = [j for j in solution_idxs if j in english_idxs] if reference_language == "en" else []
+            solution_idx = (english_successes or solution_idxs)[0]
+        elif english_idxs:
+            solution_idx = random.choice(english_idxs)
+        else:
+            return None, False
         solution_str = response_texts[solution_idx]
         if remove_thinking_from_demonstration:
             solution_str = self._remove_thinking_trace(solution_str)
-        return solution_str
+        return solution_str, successful
 
 
     def _maybe_build_self_distillation_batch(
@@ -743,7 +736,17 @@ class RayPPOTrainer:
         )
 
         success_by_uid = self._collect_solutions_by_group(batch, reward_tensor, success_reward_threshold=self_distillation_cfg.success_reward_threshold, group_ids=group_ids)
-        solution_strs = [
+        reference_language = self_distillation_cfg.get("solution_reference_language", "any")
+        if reference_language not in ("en", "any"):
+            raise ValueError(f"solution_reference_language must be en or any, got {reference_language!r}")
+        english_by_group = defaultdict(list)
+        if languages is not None:
+            for i, (group_id, language) in enumerate(zip(group_ids, languages, strict=True)):
+                code = str(language).strip().lower().replace("_", "-")
+                if code == "english" or code.split("-", 1)[0] == "en":
+                    english_by_group[group_id].append(i)
+
+        demonstrations = [
             self._get_solution(
                 i,
                 success_by_uid,
@@ -751,27 +754,31 @@ class RayPPOTrainer:
                 response_texts,
                 self_distillation_cfg.dont_reprompt_on_self_success,
                 self_distillation_cfg.get("remove_thinking_from_demonstration", False),
-                languages,
-                self_distillation_cfg.get("preferred_solution_languages", ["en"]),
+                english_by_group,
+                reference_language,
             )
             for i in range(batch_size)
         ]
 
+        solution_strs = [text for text, _ in demonstrations]
+
         def _build_teacher_message(i: int) -> list[dict]:
             system_messages = batch.non_tensor_batch["raw_prompt"][i][:-1]
-            has_solution = solution_strs[i] is not None
+            solution, successful = demonstrations[i]
+            has_solution = solution is not None
             has_feedback = feedback_list[i] is not None
             feedback_only_without_solution = self_distillation_cfg.get("environment_feedback_only_without_solution", False)
 
             # If feedback_only_without_solution is True, only use feedback when no solution exists
-            use_feedback = has_feedback and (not feedback_only_without_solution or not has_solution)
+            use_feedback = has_feedback and (not feedback_only_without_solution or not successful)
 
             # build solution section
             solution_section = ""
             if has_solution:
-                solution_section = self_distillation_cfg.solution_template.format(
-                    successful_previous_attempt=solution_strs[i]
-                )
+                if successful:
+                    solution_section = self_distillation_cfg.solution_template.format(successful_previous_attempt=solution)
+                else:
+                    solution_section = f"\nEarlier unverified English attempt. Check it for mistakes before using it.\n\n{solution}\n"
 
             # build feedback section
             feedback_section = ""
@@ -821,7 +828,7 @@ class RayPPOTrainer:
         # Compute which samples actually use feedback (accounting for environment_feedback_only_without_solution)
         feedback_only_without_solution = self_distillation_cfg.get("environment_feedback_only_without_solution", False)
         feedback_used = [
-            feedback_list[i] is not None and (not feedback_only_without_solution or solution_strs[i] is None)
+            feedback_list[i] is not None and (not feedback_only_without_solution or not demonstrations[i][1])
             for i in range(batch_size)
         ]
 
@@ -835,10 +842,10 @@ class RayPPOTrainer:
         solution_groups = set(group_ids)
         num_with_feedback_available = sum(1 for f in feedback_list if f is not None)
         num_with_feedback_used = sum(1 for f in feedback_used if f)
-        num_with_solution = sum(1 for s in solution_strs if s is not None)
+        num_with_successful_solution = sum(successful for _, successful in demonstrations)
         metrics = {
             "self_distillation/success_group_fraction": len([group_id for group_id in solution_groups if len(success_by_uid[group_id]) > 0]) / len(solution_groups),
-            "self_distillation/success_sample_fraction": num_with_solution / batch_size,
+            "self_distillation/success_sample_fraction": num_with_successful_solution / batch_size,
             "self_distillation/feedback_available_fraction": num_with_feedback_available / batch_size,
             "self_distillation/feedback_used_fraction": num_with_feedback_used / batch_size,
             "self_distillation/reprompt_sample_fraction": self_distillation_mask.float().mean().item(),

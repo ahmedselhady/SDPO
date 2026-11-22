@@ -365,7 +365,8 @@ class ActorRolloutRefWorker(Worker, DistProfilerExtension):
 
         # NOTE(fix me): tie_word_embedding causes meta_tensor init to hang
         init_context = get_init_weight_context_manager(
-            use_meta_tensor=not actor_model_config.tie_word_embeddings, mesh=self.device_mesh
+            use_meta_tensor=fsdp_config.get("use_meta_init", True) and not actor_model_config.tie_word_embeddings,
+            mesh=self.device_mesh,
         )
 
         with init_context(), warnings.catch_warnings():

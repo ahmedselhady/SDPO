@@ -122,8 +122,9 @@ self_distillation:
   # Dataset column containing the rollout prompt language
   solution_language_key: language
 
-  # Prefer a successful demonstration from these languages, in order
-  preferred_solution_languages: [en]
+  # Use en to prefer English successes or any to consider all successes equally.
+  # When no eligible success exists, sample an English attempt from the same problem.
+  solution_reference_language: any
 
   # Whether to include environment feedback in reprompting for wrong attempts
   # If True and feedback exists: use reprompt_template_feedback_solution (with solution) or reprompt_template_feedback (without solution)

@@ -200,8 +200,6 @@ def main():
     languages = [canonical_language(language) for language in args.languages.split(",") if language.strip()]
     if not languages:
         parser.error("--languages must contain at least one language code")
-    if args.train_percentage is None and "en" not in languages:
-        raise ValueError("The English language config 'en' is required for SDPO English demonstrations")
     if len(languages) != len(set(languages)):
         raise ValueError(f"Duplicate languages requested: {languages}")
     if args.max_train_groups is not None and args.max_train_groups <= 0:
