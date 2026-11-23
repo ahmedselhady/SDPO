@@ -690,6 +690,8 @@ class DataParallelPPOActor(BasePPOActor):
                 "teacher_position_ids",
                 "self_distillation_mask",
             }
+            if self_distillation_cfg.get("grpo_on_success", False):
+                self_distillation_required_keys.add("grpo_success_mask")
             assert self_distillation_required_keys.issubset(set(data.batch.keys())), f"Missing required keys: {self_distillation_required_keys - set(data.batch.keys())}"
 
         select_keys = [
@@ -844,6 +846,33 @@ class DataParallelPPOActor(BasePPOActor):
                             loss_agg_mode=loss_agg_mode,
                             rollout_is_weights=rollout_is_weights,
                         )
+
+                        grpo_success_mask = model_inputs.get("grpo_success_mask")
+                        if grpo_success_mask is not None:
+                            # Use the full response denominator for both routed objectives.
+                            if loss_agg_mode == "token-mean":
+                                active_tokens = response_mask * self_distillation_mask.unsqueeze(-1)
+                                pg_loss = pg_loss * active_tokens.sum() / response_mask.sum().clamp(min=1)
+                            elif loss_agg_mode in ("seq-mean-token-sum", "seq-mean-token-mean"):
+                                active_rows = response_mask.any(dim=-1)
+                                pg_loss = pg_loss * (active_rows * self_distillation_mask).sum() / active_rows.sum().clamp(min=1)
+
+                            pg_metrics["self_distillation/loss"] = pg_loss.detach().item()
+                            pg_metrics["self_distillation/success_grpo_loss"] = 0.0
+                            grpo_rows = grpo_success_mask.unsqueeze(-1)
+                            if (response_mask.bool() & grpo_rows).any():
+                                grpo_loss, grpo_metrics = get_policy_loss_fn("vanilla")(
+                                    old_log_prob=old_log_prob,
+                                    log_prob=log_prob,
+                                    advantages=advantages * grpo_rows,
+                                    response_mask=response_mask,
+                                    loss_agg_mode=loss_agg_mode,
+                                    config=self.config,
+                                    rollout_is_weights=rollout_is_weights,
+                                )
+                                pg_metrics["self_distillation/success_grpo_loss"] = grpo_loss.detach().item()
+                                pg_metrics.update(grpo_metrics)
+                                pg_loss = pg_loss + grpo_loss
 
                         pg_metrics["self_distillation/empty_target_batch"] = self_distillation_mask.sum().item() == 0
                         micro_batch_metrics.update(pg_metrics)

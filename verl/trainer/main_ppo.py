@@ -129,6 +129,9 @@ class TaskRunner:
         self_distillation_cfg = config.actor_rollout_ref.actor.get("self_distillation", None)
         loss_mode = config.actor_rollout_ref.actor.policy_loss.get("loss_mode", "vanilla")
         self_distillation_needs_ref = self_distillation_cfg is not None and loss_mode == "sdpo"
+        if self_distillation_needs_ref and self_distillation_cfg.get("grpo_on_success", False):
+            if config.algorithm.adv_estimator != "grpo":
+                raise ValueError("SDPO grpo_on_success requires algorithm.adv_estimator=grpo.")
         if self_distillation_needs_ref and need_reference_policy(config):
             raise ValueError("SDPO cannot share the reference policy with KL regularization.")
         if self_distillation_needs_ref and use_legacy_worker_impl == "disable":

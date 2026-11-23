@@ -51,15 +51,20 @@ for language in "${language_codes[@]}"; do
     seen_languages+="$language,"
 done
 
-# Use en to prefer successful English references, or any to use any successful language.
-reference_language="${SOLUTION_REFERENCE_LANGUAGE-en}"
+# Restrict references to English prompts by default. Use en to prefer English or any to mix languages.
+reference_language="${SOLUTION_REFERENCE_LANGUAGE:-en_only}"
 case "$reference_language" in
-    en|any) ;;
+    en|en_only|any) ;;
     *)
-        printf '%s\n' 'ERROR: SOLUTION_REFERENCE_LANGUAGE must be en or any.' >&2
+        printf '%s\n' 'ERROR: SOLUTION_REFERENCE_LANGUAGE must be en, en_only, or any.' >&2
         exit 1
         ;;
 esac
+
+if [[ "$reference_language" == en_only && "$seen_languages" != *,en,* ]]; then
+    printf '%s\n' 'ERROR: en_only requires en in LANGUAGES.' >&2
+    exit 1
+fi
 
 # Keep two complete parallel groups in each training batch.
 TRAIN_BATCH_SIZE=$((2 * ${#language_codes[@]}))
@@ -72,9 +77,23 @@ SOURCE_DATASET="${SOURCE_DATASET:-ahmedselhady/mAceReason-Math}"
 CONTAINER_IMAGE="${SDPO_CONTAINER_IMAGE:-/scratch/asalem/SDPO-qwen35-vllm-0.19.1.sif}"
 CONTAINER_ENV="${SDPO_CONTAINER_ENV:-/scratch/asalem/SDPO-qwen35-container-venv}"
 MODEL_PATH="${MODEL_PATH:-nvidia/Nemotron-Research-Reasoning-Qwen-1.5B}"
-EXPERIMENT="${EXPERIMENT:-macereason-math-${DATASET_TAG}-nemotron-1.5b}"
+TEACHER_PROMPT_TOKENS=10752
+LEARNING_RATE="${LEARNING_RATE:-3e-6}"
+USE_KL_LOSS="${USE_KL_LOSS:-False}"
+KL_LOSS_COEF="${KL_LOSS_COEF:-0.001}"
+case "${USE_KL_LOSS,,}" in
+    true) kl_tag="kl${KL_LOSS_COEF}" ;;
+    false) kl_tag="no-kl" ;;
+    *)
+        printf 'ERROR: USE_KL_LOSS must be True or False.\n' >&2
+        exit 1
+        ;;
+esac
+EXPERIMENT="${EXPERIMENT:-macereason-math-${DATASET_TAG}-nemotron-1.5b-lr${LEARNING_RATE}-${kl_tag}-full-ref${TEACHER_PROMPT_TOKENS}-gs}"
 CACHE_DIR="${CACHE_DIR:-/scratch/asalem/.cache/huggingface}"
 CHECKPOINT_DIR="${CHECKPOINT_DIR:-$SDPO_DIR/checkpoints/$EXPERIMENT-$reference_language}"
+ROLLOUT_DATA_DIR="${ROLLOUT_DATA_DIR:-$CHECKPOINT_DIR/rollouts}"
+LOG_TEACHER_PROMPTS="${LOG_TEACHER_PROMPTS:-3}"
 
 ENV_FILE="$SDPO_DIR/.env"
 if [[ ! -f "$ENV_FILE" ]]; then
@@ -133,7 +152,7 @@ ulimit -c 0
 cd "$SDPO_DIR"
 mkdir -p "$DATA_DIR" "$CHECKPOINT_DIR" "$HF_HOME" "$HF_DATASETS_CACHE"
 
-"$NOTIFY" "Preparing dataset: source=$SOURCE_DATASET output=$DATA_DIR max_train_groups=$MAX_TRAIN_GROUPS languages=$dataset_languages seed=42" || true
+"$NOTIFY" "Preparing dataset: source=$SOURCE_DATASET output=$DATA_DIR max_train_groups=$MAX_TRAIN_GROUPS languages=$dataset_languages seed=5331" || true
 
 "${python_cmd[@]}" data/prepare_macereason_math.py \
     --dataset "$SOURCE_DATASET" \
@@ -150,6 +169,8 @@ mkdir -p "$DATA_DIR" "$CHECKPOINT_DIR" "$HF_HOME" "$HF_DATASETS_CACHE"
 "$NOTIFY" "🚀 $TAG Checkpoint directory: $CHECKPOINT_DIR" || true
 
 "$NOTIFY" "Launching verl.trainer.main_ppo; live training progress follows" || true
+printf 'Actor learning rate=%s reference KL enabled=%s coefficient=%s\n' "$LEARNING_RATE" "$USE_KL_LOSS" "$KL_LOSS_COEF"
+printf 'Training rollout dumps: %s\n' "$ROLLOUT_DATA_DIR"
 "$NOTIFY" "Ray resources: cpus=$RAY_NUM_CPUS object_store_memory=${RAY_OBJECT_STORE_MEMORY}B" || true
 training_status=0
 "${python_cmd[@]}" -m verl.trainer.main_ppo --config-name sdpo \
@@ -169,7 +190,16 @@ training_status=0
     "actor_rollout_ref.rollout.tensor_model_parallel_size=1" \
     "actor_rollout_ref.rollout.n=32" \
     "actor_rollout_ref.actor.ppo_mini_batch_size=$TRAIN_BATCH_SIZE" \
+    "actor_rollout_ref.actor.optim.lr=$LEARNING_RATE" \
+    "actor_rollout_ref.actor.use_kl_loss=$USE_KL_LOSS" \
+    "actor_rollout_ref.actor.kl_loss_coef=$KL_LOSS_COEF" \
+    "actor_rollout_ref.actor.calculate_entropy=True" \
+    "actor_rollout_ref.actor.entropy_coeff=0" \
+    "actor_rollout_ref.actor.self_distillation.remove_thinking_from_demonstration=False" \
+    "actor_rollout_ref.actor.self_distillation.grpo_on_success=True" \
+    "actor_rollout_ref.actor.self_distillation.max_reprompt_len=$TEACHER_PROMPT_TOKENS" \
     "actor_rollout_ref.actor.self_distillation.solution_reference_language=$reference_language" \
+    "actor_rollout_ref.actor.self_distillation.log_teacher_prompts=$LOG_TEACHER_PROMPTS" \
     "trainer.project_name=SDPO-multilingual" \
     "trainer.group_name=macereason-math-$MAX_TRAIN_GROUPS" \
     "trainer.experiment_name=$EXPERIMENT" \
@@ -181,6 +211,7 @@ training_status=0
     "trainer.val_before_train=False" \
     "trainer.resume_mode=disable" \
     "trainer.default_local_dir=$CHECKPOINT_DIR" \
+    "trainer.rollout_data_dir=$ROLLOUT_DATA_DIR" \
     "trainer.max_actor_ckpt_to_keep=null" \
     "ray_kwargs.ray_init.num_cpus=$RAY_NUM_CPUS" \
     "+ray_kwargs.ray_init.object_store_memory=$RAY_OBJECT_STORE_MEMORY" || training_status=$?

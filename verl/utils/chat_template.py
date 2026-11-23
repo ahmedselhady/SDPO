@@ -6,6 +6,24 @@ logger = logging.getLogger(__name__)
 logger.setLevel(os.getenv("VERL_LOGGING_LEVEL", "WARN"))
 
 
+def strip_thinking_trace(text: str) -> str:
+    """Keep the visible answer after a reasoning trace, including an implicit opening tag."""
+    visible = text.rsplit("</think>", 1)[-1]
+    return visible.split("<think>", 1)[0].strip()
+
+
+def format_full_reasoning_reference(text: str) -> str:
+    """Keep the reasoning and final response while removing chat-template markers."""
+    reasoning, separator, final_response = text.rpartition("</think>")
+    if not separator:
+        return text.replace("<think>", "").strip()
+    reasoning = reasoning.replace("<think>", "").replace("</think>", "").strip()
+    final_response = final_response.replace("<think>", "").strip()
+    if not reasoning:
+        return final_response
+    return f"Reference reasoning:\n{reasoning}\n\nReference final response:\n{final_response}"
+
+
 def initialize_system_prompt(tokenizer, **apply_chat_template_kwargs) -> list[int]:
     """
     Initialize system prompt tokens for chat templates that support them.

@@ -1,3 +1,4 @@
+from verl.utils.reward_score import macereason
 from verl.utils.reward_score.feedback import math
 from verl.utils.reward_score.feedback import code
 from verl.utils.reward_score.feedback import gpqa
@@ -13,6 +14,8 @@ def compute_score(
 ) -> dict:
     if data_source in ["code", "livecodebench", "humanevalplus"]:
         results = code.compute_score(solution_str, ground_truth, extra_info, sparse_rewards=True, max_test_cases=None)
+    elif macereason.is_macereason(data_source, extra_info):
+        results = macereason.compute_score(solution_str, ground_truth, extra_info)
     elif data_source in ["math", "math500", "dapo_math", "gsm8k"]:
         results = math.compute_score(solution_str, ground_truth, extra_info)
     elif data_source in ["gpqa"]:

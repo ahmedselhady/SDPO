@@ -118,7 +118,7 @@ def convert_split(
             )
             rows.append(
                 {
-                    "data_source": "math",
+                    "data_source": "macereason_math",
                     "prompt": [{"role": "user", "content": f"{instruction}\n\n{problem}"}],
                     "reward_model": {"style": "math", "ground_truth": str(solution)},
                     "extra_info": {

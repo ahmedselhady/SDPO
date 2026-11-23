@@ -35,3 +35,20 @@ def test_convert_split_excludes_parallel_groups_with_empty_solutions(monkeypatch
     output = capsys.readouterr().out
     assert "excluded 1 parallel groups with empty solutions" in output
     assert "2 (ko)" in output
+
+
+def test_prepared_rows_use_localized_boxed_reward(monkeypatch):
+    monkeypatch.setattr(prepare_macereason_math, "get_dataset_config_names", lambda _: ["es"])
+    monkeypatch.setattr(
+        prepare_macereason_math,
+        "load_dataset",
+        lambda *args, **kwargs: Dataset.from_list([
+            {"original_idx": 1, "problem": "¿Cuánto es 2 + 2?", "solution": "4"},
+        ]),
+    )
+
+    row = prepare_macereason_math.convert_split("dataset", "train", ["es"], None, None, None)[0]
+
+    assert row["data_source"] == "macereason_math"
+    assert r"\boxed" in row["prompt"][0]["content"]
+    assert "español" in row["prompt"][0]["content"]

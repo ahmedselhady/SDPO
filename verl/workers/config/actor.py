@@ -49,7 +49,9 @@ class SelfDistillationConfig(BaseConfig):
         distillation_topk (Optional[int]): If set, use top-k logits for distillation.
         distillation_add_tail (bool): Whether to add a tail bucket for top-k distillation.
         max_reprompt_len (int): Maximum length of the reprompted prompt.
-        reprompt_truncation (str): Truncation method for the reprompted prompt (recommended to use "right" or "error").
+        reprompt_truncation (str): Skip overlong reprompts or raise an error.
+        log_teacher_prompts (int): Number of decoded teacher prompts to log at the first training step.
+        grpo_on_success (bool): Route successful rollouts to GRPO and failed rollouts to SDPO.
         dont_reprompt_on_self_success (bool): Whether to not reprompt on self-success.
         remove_thinking_from_demonstration (bool): Whether to remove <think>...</think> tags from successful demonstrations before reprompting.
         is_clip (Optional[float]): Clip value for distillation IS ratio; None disables IS weighting.
@@ -60,7 +62,7 @@ class SelfDistillationConfig(BaseConfig):
         environment_feedback_only_without_solution (bool): If True, only use feedback when no solution is available (ignore feedback when solution exists).
         solution_group_key (str): Dataset column identifying parallel translations of the same problem.
         solution_language_key (str): Dataset column containing each prompt's language code or name.
-        solution_reference_language (str): Reference language mode, either en or any.
+        solution_reference_language (str): Reference prompt language mode: en, en_only, or any.
         allow_unverified_english_fallback (bool): Allow English attempts with unverified answers as fallback context.
         reprompt_template_feedback (str): Template for reprompting with feedback but no solution.
         reprompt_template_feedback_solution (str): Template for reprompting with both feedback and solution.
@@ -74,8 +76,10 @@ class SelfDistillationConfig(BaseConfig):
     distillation_topk: Optional[int] = None
     distillation_add_tail: bool = True
     max_reprompt_len: int = 10240
-    reprompt_truncation: str = "right"
+    reprompt_truncation: str = "skip"
+    log_teacher_prompts: int = 0
     dont_reprompt_on_self_success: bool = False
+    grpo_on_success: bool = False
     remove_thinking_from_demonstration: bool = False
     is_clip: Optional[float] = None
     reprompt_template: str = (
@@ -101,6 +105,10 @@ class SelfDistillationConfig(BaseConfig):
     allow_unverified_english_fallback: bool = False
 
     def __post_init__(self):
+        if self.reprompt_truncation not in ("skip", "error", "left", "right"):
+            raise ValueError(f"Invalid self_distillation.reprompt_truncation: {self.reprompt_truncation!r}")
+        if self.log_teacher_prompts < 0:
+            raise ValueError("self_distillation.log_teacher_prompts must be non-negative")
         if not 0.0 <= self.alpha <= 1.0:
             raise ValueError(f"self_distillation.alpha must be in [0,1], got {self.alpha}")
         valid_teacher_regularization = ["ema", "trust-region"]

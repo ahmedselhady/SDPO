@@ -36,11 +36,19 @@ fail() {
 
 ROOT_DIR="/scratch/asalem/repos"
 SDPO_DIR="${SDPO_DIR:-$ROOT_DIR/SDPO}"
-DATA_DIR="${DATA_DIR:-$SDPO_DIR/datasets/mAceReason-Math-en-es-10}"
 SOURCE_DATASET="${SOURCE_DATASET:-ahmedselhady/mAceReason-Math}"
 ENV_DIR="${SDPO_ENV:-/scratch/asalem/SDPO-venv}"
 MODEL_PATH="${MODEL_PATH:-nvidia/Nemotron-Research-Reasoning-Qwen-1.5B}"
-EXPERIMENT="${EXPERIMENT:-macereason-math-en-es-10-nemotron-1.5b}"
+TEACHER_PROMPT_TOKENS=10752
+# Use vanilla policy loss with GRPO advantages for the paired baseline.
+POLICY_LOSS_MODE="${POLICY_LOSS_MODE:-sdpo}"
+case "$POLICY_LOSS_MODE" in
+    sdpo) experiment_suffix="-full-ref${TEACHER_PROMPT_TOKENS}-gs" ;;
+    vanilla) experiment_suffix="-grpo" ;;
+    *) fail "POLICY_LOSS_MODE must be sdpo or vanilla." ;;
+esac
+DATA_DIR="${DATA_DIR:-$SDPO_DIR/datasets/mAceReason-Math-en-es-10$experiment_suffix}"
+EXPERIMENT="${EXPERIMENT:-macereason-math-en-es-10-nemotron-1.5b$experiment_suffix}"
 CACHE_DIR="${CACHE_DIR:-/scratch/asalem/.cache/huggingface}"
 CHECKPOINT_DIR="${CHECKPOINT_DIR:-$SDPO_DIR/checkpoints/$EXPERIMENT}"
 
@@ -128,6 +136,12 @@ mkdir -p "$DATA_DIR" "$CHECKPOINT_DIR" "$HF_HOME" "$HF_DATASETS_CACHE"
     "actor_rollout_ref.model.use_remove_padding=False" \
     "actor_rollout_ref.rollout.n=8" \
     "actor_rollout_ref.actor.ppo_mini_batch_size=2" \
+    "actor_rollout_ref.actor.policy_loss.loss_mode=$POLICY_LOSS_MODE" \
+    "actor_rollout_ref.actor.self_distillation.remove_thinking_from_demonstration=False" \
+    "actor_rollout_ref.actor.self_distillation.grpo_on_success=True" \
+    "actor_rollout_ref.actor.self_distillation.max_reprompt_len=$TEACHER_PROMPT_TOKENS" \
+    "actor_rollout_ref.actor.self_distillation.solution_reference_language=en_only" \
+    "actor_rollout_ref.actor.self_distillation.log_teacher_prompts=${LOG_TEACHER_PROMPTS:-3}" \
     "trainer.project_name=SDPO-multilingual" \
     "trainer.group_name=macereason-math-en-es" \
     "trainer.experiment_name=$EXPERIMENT" \

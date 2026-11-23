@@ -1184,6 +1184,7 @@ def compute_self_distillation_loss(
         loss_mask=loss_mask,
         loss_agg_mode=loss_agg_mode,
         batch_num_tokens=loss_mask.sum().clamp(min=1.0),
+        global_batch_size=loss_mask.any(dim=-1).sum().clamp(min=1),
     )
     return loss, metrics
 

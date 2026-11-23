@@ -107,11 +107,18 @@ self_distillation:
   # Maximum length of the reprompted prompt
   max_reprompt_len: 10240
 
-  # Truncation method for the reprompted prompt (recommended to use "right" or "error")
-  reprompt_truncation: right # "left", "right", "error"
+  # On overflow, skip reprompting for that row or raise an error.
+  # Legacy "left" and "right" values also skip reprompting.
+  reprompt_truncation: skip
+
+  # Number of decoded teacher prompts to log on the first training step.
+  log_teacher_prompts: 0
 
   # Whether to not reprompt on self-success
   dont_reprompt_on_self_success: True
+
+  # Use GRPO advantages on successful rows. Apply SDPO to failed rows with feedback or a reference.
+  grpo_on_success: false
 
   # Whether to remove <think>...</think> tags from successful demonstrations before reprompting
   remove_thinking_from_demonstration: True
@@ -122,7 +129,7 @@ self_distillation:
   # Dataset column containing the rollout prompt language
   solution_language_key: language
 
-  # Use en to prefer English successes or any to consider all successes equally.
+  # Select successful references from English prompts only (en_only), prefer them (en), or use any prompt language.
   solution_reference_language: any
 
   # Allow an unverified English attempt as context when no eligible success exists.
