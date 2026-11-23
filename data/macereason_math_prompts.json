@@ -1,0 +1,58 @@
+{
+  "bn": {
+    "instruction": "সমস্যাটি সমাধান করুন। সংক্ষেপে যুক্তি দেখান এবং চূড়ান্ত উত্তরটি বাংলায় দিন। শেষ লাইনে শুধু একবার \\boxed{...} আকারে চূড়ান্ত উত্তরটি লিখুন।",
+    "reference": "উদাহরণটির জন্য নির্ধারিত ভাষা: {reference_language}। যুক্তি যাচাই করে উদাহরণটি ব্যবহার করুন এবং বাংলায় উত্তর দিন।"
+  },
+  "de": {
+    "instruction": "Löse die Aufgabe. Begründe deine Lösung kurz auf Deutsch. Schreibe in der letzten Zeile nur die Endantwort, genau einmal im Format \\boxed{...}.",
+    "reference": "Vorgesehene Sprache des Lösungsbeispiels: {reference_language}. Prüfe die Begründung und antworte auf Deutsch."
+  },
+  "en": {
+    "instruction": "Solve the problem. Show concise reasoning in English. Write only the final answer on the last line, exactly once in \\boxed{...}.",
+    "reference": "Requested language of the reference solution: {reference_language}. Check its reasoning and answer in English."
+  },
+  "es": {
+    "instruction": "Resuelve el problema. Explica brevemente tu razonamiento en español. Escribe solo la respuesta final en la última línea, una sola vez en el formato \\boxed{...}.",
+    "reference": "Idioma solicitado para el ejemplo de referencia: {reference_language}. Comprueba su razonamiento y responde en español."
+  },
+  "fr": {
+    "instruction": "Résous le problème. Explique brièvement ton raisonnement en français. Sur la dernière ligne, écris uniquement la réponse finale, une seule fois au format \\boxed{...}.",
+    "reference": "Langue demandée pour l’exemple de référence : {reference_language}. Vérifie son raisonnement et réponds en français."
+  },
+  "it": {
+    "instruction": "Risolvi il problema. Spiega brevemente il ragionamento in italiano. Nell’ultima riga scrivi soltanto la risposta finale, una sola volta nel formato \\boxed{...}.",
+    "reference": "Lingua richiesta per l’esempio di riferimento: {reference_language}. Verifica il ragionamento e rispondi in italiano."
+  },
+  "ja": {
+    "instruction": "問題を解き、日本語で考え方を簡潔に説明してください。最後の行には、最終答案だけを \\boxed{...} の形式で一度だけ書いてください。",
+    "reference": "参考解答に指定された言語は {reference_language} です。解法を確認し、日本語で答えてください。"
+  },
+  "ko": {
+    "instruction": "문제를 풀고 풀이 과정을 한국어로 간결하게 설명하세요. 마지막 줄에는 최종 답만 \\boxed{...} 형식으로 한 번만 쓰세요.",
+    "reference": "참고 풀이에 지정된 언어는 {reference_language}입니다. 풀이가 맞는지 확인하고 한국어로 답하세요."
+  },
+  "pt": {
+    "instruction": "Resolve o problema. Explica brevemente o raciocínio em português. Na última linha, escreve apenas a resposta final, uma única vez no formato \\boxed{...}.",
+    "reference": "Idioma solicitado para o exemplo de referência: {reference_language}. Verifica o raciocínio e responde em português."
+  },
+  "ru": {
+    "instruction": "Решите задачу. Кратко объясните ход решения на русском языке. В последней строке запишите только окончательный ответ, ровно один раз в формате \\boxed{...}.",
+    "reference": "Язык, заданный для примера решения: {reference_language}. Проверьте ход решения и ответьте на русском языке."
+  },
+  "sw": {
+    "instruction": "Tatua tatizo. Eleza kwa ufupi hatua za suluhisho kwa Kiswahili. Katika mstari wa mwisho, andika jibu la mwisho pekee, mara moja tu kwa muundo wa \\boxed{...}.",
+    "reference": "Lugha iliyoombwa kwa mfano wa suluhisho: {reference_language}. Hakiki hatua zake na ujibu kwa Kiswahili."
+  },
+  "te": {
+    "instruction": "సమస్యను పరిష్కరించండి. మీ తర్కాన్ని తెలుగులో క్లుప్తంగా వివరించండి. చివరి పంక్తిలో తుది జవాబును మాత్రమే \\boxed{...} రూపంలో ఒక్కసారి రాయండి.",
+    "reference": "ఉదాహరణ పరిష్కారానికి కోరిన భాష: {reference_language}. దాని తర్కాన్ని తనిఖీ చేసి తెలుగులో జవాబు ఇవ్వండి."
+  },
+  "th": {
+    "instruction": "แก้โจทย์และอธิบายวิธีคิดอย่างกระชับเป็นภาษาไทย ในบรรทัดสุดท้ายให้เขียนเฉพาะคำตอบสุดท้ายเพียงครั้งเดียวในรูปแบบ \\boxed{...}",
+    "reference": "ภาษาที่กำหนดสำหรับตัวอย่างวิธีแก้คือ {reference_language} ตรวจสอบเหตุผลในตัวอย่างแล้วตอบเป็นภาษาไทย"
+  },
+  "zh": {
+    "instruction": "请解答这道题，并用中文简要说明推理过程。最后一行只写最终答案，并且只用一次 \\boxed{...} 格式。",
+    "reference": "参考解答所要求的语言：{reference_language}。请核对参考解答的推理，并用中文作答。"
+  }
+}

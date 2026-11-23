@@ -123,8 +123,10 @@ self_distillation:
   solution_language_key: language
 
   # Use en to prefer English successes or any to consider all successes equally.
-  # When no eligible success exists, sample an English attempt from the same problem.
   solution_reference_language: any
+
+  # Allow an unverified English attempt as context when no eligible success exists.
+  allow_unverified_english_fallback: false
 
   # Whether to include environment feedback in reprompting for wrong attempts
   # If True and feedback exists: use reprompt_template_feedback_solution (with solution) or reprompt_template_feedback (without solution)
@@ -139,14 +141,15 @@ self_distillation:
 
   # Reprompting template - available variables: prompt, solution, feedback, response_language
   reprompt_template: |-
+    Write your reasoning and final answer in {response_language}.
+    Use any reference rollout as guidance for the math. Keep your response in the required answer language.
+
     {prompt}{solution}{feedback}
 
-    Use the solution as guidance. Correctly solve the original question and write your answer in {response_language}.
-
-  # Solution template - available variables: successful_previous_attempt
+  # Solution template - available variables: successful_previous_attempt, reference_language
   solution_template: |-
 
-    Successful solution for this problem (it may be in another language):
+    Successful reference rollout for this problem. Its requested language was {reference_language}.
 
     {successful_previous_attempt}
 

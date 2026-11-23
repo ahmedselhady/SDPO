@@ -3,6 +3,7 @@
 
 import argparse
 from collections import defaultdict
+import json
 import math
 from pathlib import Path
 import random
@@ -27,6 +28,8 @@ LANGUAGE_NAMES = {
     "thai": "th",
     "telugu": "te",
 }
+LANGUAGE_LABELS = {code: name.capitalize() for name, code in LANGUAGE_NAMES.items()}
+PROMPTS = json.loads(Path(__file__).with_name("macereason_math_prompts.json").read_text(encoding="utf-8"))
 
 
 def canonical_language(value) -> str:
@@ -107,12 +110,23 @@ def convert_split(
                 continue
             if not problem.strip():
                 raise ValueError(f"Empty problem for {language}/{split}, ID={parallel_id!r}")
+            language_name = LANGUAGE_LABELS.get(language, language)
+            localized_prompt = PROMPTS.get(language, {})
+            instruction = localized_prompt.get("instruction") or (
+                f"Write your reasoning and final answer in {language_name}. "
+                "Give the final answer exactly once in \\boxed{...}."
+            )
             rows.append(
                 {
                     "data_source": "math",
-                    "prompt": [{"role": "user", "content": problem}],
+                    "prompt": [{"role": "user", "content": f"{instruction}\n\n{problem}"}],
                     "reward_model": {"style": "math", "ground_truth": str(solution)},
-                    "extra_info": {"index": parallel_id, "source": "mAceReason-Math"},
+                    "extra_info": {
+                        "index": parallel_id,
+                        "source": "mAceReason-Math",
+                        "language_name": language_name,
+                        "localized_reference_instruction": localized_prompt.get("reference"),
+                    },
                     "parallel_id": parallel_id,
                     "language": language,
                 }

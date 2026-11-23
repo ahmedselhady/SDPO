@@ -23,4 +23,6 @@ def compute_score(
         results = tooluse.compute_score(solution_str, ground_truth)
     else:
         raise ValueError(f"Reward style {data_source} not found.")
+    # Keep reward metadata aligned with samples when a batch mixes task types.
+    results.setdefault("sdpo_reference_eligible", True)
     return results

@@ -650,12 +650,21 @@ class RayPPOTrainer:
                     feedback_list[i] = raw_feedback[i]
         return feedback_list
 
-    def _collect_solutions_by_group(self, batch: DataProto, reward_tensor: torch.Tensor, success_reward_threshold: float, group_ids=None) -> dict[Any, list[int]]:
+    def _collect_solutions_by_group(
+        self,
+        batch: DataProto,
+        reward_tensor: torch.Tensor,
+        success_reward_threshold: float,
+        group_ids=None,
+        reference_eligible=None,
+    ) -> dict[Any, list[int]]:
         seq_scores = reward_tensor.sum(dim=-1).detach().cpu().numpy()
         uids = group_ids if group_ids is not None else batch.non_tensor_batch["uid"]
         success_by_uid: dict[Any, list[int]] = defaultdict(list)
         for idx, uid in enumerate(uids):
-            if seq_scores[idx] >= success_reward_threshold:
+            if seq_scores[idx] >= success_reward_threshold and (
+                reference_eligible is None or reference_eligible[idx]
+            ):
                 success_by_uid[uid].append(idx)
         return success_by_uid
 
@@ -674,7 +683,8 @@ class RayPPOTrainer:
         remove_thinking_from_demonstration: bool = False,
         english_by_group=None,
         reference_language: str = "any",
-    ) -> tuple[Optional[str], bool]:
+        allow_unverified_english_fallback: bool = False,
+    ) -> tuple[Optional[str], bool, Optional[int]]:
         uid = uids[idx]
         solution_idxs = success_by_uid[uid]
         english_idxs = english_by_group.get(uid, []) if english_by_group is not None else []
@@ -686,14 +696,14 @@ class RayPPOTrainer:
         if successful:
             english_successes = [j for j in solution_idxs if j in english_idxs] if reference_language == "en" else []
             solution_idx = (english_successes or solution_idxs)[0]
-        elif english_idxs:
+        elif english_idxs and allow_unverified_english_fallback:
             solution_idx = random.choice(english_idxs)
         else:
-            return None, False
+            return None, False, None
         solution_str = response_texts[solution_idx]
         if remove_thinking_from_demonstration:
             solution_str = self._remove_thinking_trace(solution_str)
-        return solution_str, successful
+        return solution_str, successful, solution_idx
 
 
     def _maybe_build_self_distillation_batch(
@@ -719,6 +729,15 @@ class RayPPOTrainer:
         non_tensor_batch = batch.non_tensor_batch
         group_ids = non_tensor_batch.get(group_key) if group_key else None
         languages = non_tensor_batch.get(language_key) if language_key else None
+        extra_infos = non_tensor_batch.get("extra_info")
+
+        def language_label(index: int, default: str) -> str:
+            if languages is None or languages[index] is None or not str(languages[index]).strip():
+                return default
+            code = str(languages[index]).strip()
+            info = extra_infos[index] if extra_infos is not None else None
+            return str(info.get("language_name") or code) if isinstance(info, dict) else code
+
         # Keep ordinary SDPO behavior when parallel-language metadata is absent.
         if group_ids is None:
             group_ids = non_tensor_batch["uid"]
@@ -735,7 +754,13 @@ class RayPPOTrainer:
             batch_size=batch_size,
         )
 
-        success_by_uid = self._collect_solutions_by_group(batch, reward_tensor, success_reward_threshold=self_distillation_cfg.success_reward_threshold, group_ids=group_ids)
+        success_by_uid = self._collect_solutions_by_group(
+            batch,
+            reward_tensor,
+            success_reward_threshold=self_distillation_cfg.success_reward_threshold,
+            group_ids=group_ids,
+            reference_eligible=(reward_extra_infos_dict or {}).get("sdpo_reference_eligible"),
+        )
         reference_language = self_distillation_cfg.get("solution_reference_language", "any")
         if reference_language not in ("en", "any"):
             raise ValueError(f"solution_reference_language must be en or any, got {reference_language!r}")
@@ -756,15 +781,18 @@ class RayPPOTrainer:
                 self_distillation_cfg.get("remove_thinking_from_demonstration", False),
                 english_by_group,
                 reference_language,
+                self_distillation_cfg.get("allow_unverified_english_fallback", False),
             )
             for i in range(batch_size)
         ]
 
-        solution_strs = [text for text, _ in demonstrations]
+        solution_strs = [text for text, _, _ in demonstrations]
 
         def _build_teacher_message(i: int) -> list[dict]:
             system_messages = batch.non_tensor_batch["raw_prompt"][i][:-1]
-            solution, successful = demonstrations[i]
+            solution, successful, solution_idx = demonstrations[i]
+            info = extra_infos[i] if extra_infos is not None else None
+            localized_reference = info.get("localized_reference_instruction") if isinstance(info, dict) else None
             has_solution = solution is not None
             has_feedback = feedback_list[i] is not None
             feedback_only_without_solution = self_distillation_cfg.get("environment_feedback_only_without_solution", False)
@@ -775,10 +803,20 @@ class RayPPOTrainer:
             # build solution section
             solution_section = ""
             if has_solution:
-                if successful:
-                    solution_section = self_distillation_cfg.solution_template.format(successful_previous_attempt=solution)
+                example_language = language_label(solution_idx, "unknown")
+                if localized_reference:
+                    source_code = str(languages[solution_idx] or "").strip() if languages is not None else ""
+                    instruction = localized_reference.format(reference_language=source_code or example_language)
+                    solution_section = f"\n\n{instruction}\n\n{solution}\n"
+                elif successful:
+                    solution_section = self_distillation_cfg.solution_template.format(
+                        successful_previous_attempt=solution, reference_language=example_language
+                    )
                 else:
-                    solution_section = f"\nEarlier unverified English attempt. Check it for mistakes before using it.\n\n{solution}\n"
+                    solution_section = (
+                        f"\nUnverified reference rollout. Its requested language was {example_language}. "
+                        f"Check it for mistakes before using it.\n\n{solution}\n"
+                    )
 
             # build feedback section
             feedback_section = ""
@@ -788,16 +826,14 @@ class RayPPOTrainer:
                 )
 
             # combine solution and feedback sections
-            if use_feedback or has_solution:
+            if localized_reference:
+                reprompt_text = f"{prompt_texts[i]}{solution_section}{feedback_section}"
+            elif use_feedback or has_solution:
                 reprompt_text = self_distillation_cfg.reprompt_template.format(
                     prompt=prompt_texts[i],
                     solution=solution_section,
                     feedback=feedback_section,
-                    response_language=(
-                        str(languages[i])
-                        if languages is not None and languages[i] is not None and str(languages[i]).strip()
-                        else "the language of the original question"
-                    ),
+                    response_language=language_label(i, "the language of the original question"),
                 )
             else:
                 reprompt_text = prompt_texts[i]
@@ -842,7 +878,7 @@ class RayPPOTrainer:
         solution_groups = set(group_ids)
         num_with_feedback_available = sum(1 for f in feedback_list if f is not None)
         num_with_feedback_used = sum(1 for f in feedback_used if f)
-        num_with_successful_solution = sum(successful for _, successful in demonstrations)
+        num_with_successful_solution = sum(successful for _, successful, _ in demonstrations)
         metrics = {
             "self_distillation/success_group_fraction": len([group_id for group_id in solution_groups if len(success_by_uid[group_id]) > 0]) / len(solution_groups),
             "self_distillation/success_sample_fraction": num_with_successful_solution / batch_size,
@@ -858,11 +894,20 @@ class RayPPOTrainer:
         }), metrics
 
     def _get_gen_batch(self, batch: DataProto) -> DataProto:
-        reward_model_keys = set({"data_source", "reward_model", "extra_info", "uid", "raw_prompt"}) & batch.non_tensor_batch.keys()
+        retained_keys = {"data_source", "reward_model", "extra_info", "uid", "raw_prompt"}
+        actor_config = self.config.actor_rollout_ref.actor
+        if actor_config.policy_loss.get("loss_mode") == "sdpo":
+            distillation_config = actor_config.get("self_distillation") or {}
+            retained_keys.update(
+                {
+                    distillation_config.get("solution_group_key", "parallel_id"),
+                    distillation_config.get("solution_language_key", "language"),
+                }
+            )
 
         # pop those keys for generation
         batch_keys_to_pop = []
-        non_tensor_batch_keys_to_pop = set(batch.non_tensor_batch.keys()) - reward_model_keys
+        non_tensor_batch_keys_to_pop = set(batch.non_tensor_batch.keys()) - retained_keys
         gen_batch = batch.pop(
             batch_keys=batch_keys_to_pop,
             non_tensor_batch_keys=list(non_tensor_batch_keys_to_pop),

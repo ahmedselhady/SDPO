@@ -54,13 +54,14 @@ class SelfDistillationConfig(BaseConfig):
         remove_thinking_from_demonstration (bool): Whether to remove <think>...</think> tags from successful demonstrations before reprompting.
         is_clip (Optional[float]): Clip value for distillation IS ratio; None disables IS weighting.
         reprompt_template (str): Template for reprompting. Uses {prompt}, {solution}, {feedback} placeholders.
-        solution_template (str): Template for formatting solution section. Uses {successful_previous_attempt} placeholder.
+        solution_template (str): Template for the solution section, with {successful_previous_attempt} and {reference_language}.
         feedback_template (str): Template for formatting feedback section. Uses {feedback_raw} placeholder.
         include_environment_feedback (bool): Whether to include environment feedback in reprompting for wrong attempts.
         environment_feedback_only_without_solution (bool): If True, only use feedback when no solution is available (ignore feedback when solution exists).
         solution_group_key (str): Dataset column identifying parallel translations of the same problem.
         solution_language_key (str): Dataset column containing each prompt's language code or name.
         solution_reference_language (str): Reference language mode, either en or any.
+        allow_unverified_english_fallback (bool): Allow English attempts with unverified answers as fallback context.
         reprompt_template_feedback (str): Template for reprompting with feedback but no solution.
         reprompt_template_feedback_solution (str): Template for reprompting with both feedback and solution.
     """
@@ -78,12 +79,13 @@ class SelfDistillationConfig(BaseConfig):
     remove_thinking_from_demonstration: bool = False
     is_clip: Optional[float] = None
     reprompt_template: str = (
-        "{prompt}{solution}{feedback}\n\n"
-        "Correctly solve the original question.\n"
+        "Write your reasoning and final answer in {response_language}. "
+        "Use any reference rollout as guidance.\n\n"
+        "{prompt}{solution}{feedback}\n"
     )
     solution_template: str = (
         "\n"
-        "Correct solution:\n\n"
+        "Successful reference rollout. Its requested language was {reference_language}.\n\n"
         "{successful_previous_attempt}\n\n"
     )
     feedback_template: str = (
@@ -96,6 +98,7 @@ class SelfDistillationConfig(BaseConfig):
     solution_group_key: Optional[str] = "parallel_id"
     solution_language_key: Optional[str] = "language"
     solution_reference_language: str = "any"
+    allow_unverified_english_fallback: bool = False
 
     def __post_init__(self):
         if not 0.0 <= self.alpha <= 1.0:

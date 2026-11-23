@@ -162,7 +162,6 @@ def compute_score(
         Reward score (1.0 for correct, 0 for incorrect)
     """
     split = extra_info.get("split", "test")
-    was_truncated = extra_info.get("truncated", False)
 
     # Verify the solution
     correct, pred = verify(solution_str, ground_truth, pause_tokens_index)
@@ -171,6 +170,8 @@ def compute_score(
     score = reward
     incorrect_format = pred is None or pred == ""
     was_truncated = extra_info.get("truncated", False)
+    final_box = last_boxed_only_string(solution_str)
+    repeated_final_box = bool(final_box and solution_str.count(final_box) >= 3)
     if FORMAT_PENALTY and split == "train" and incorrect_format and (not was_truncated):
         score -= 0.5
 
@@ -190,5 +191,6 @@ def compute_score(
         "incorrect_format": 1 if incorrect_format else 0,
         "truncated": 1 if was_truncated else 0,
         "truncated_and_missing_answer": 1 if incorrect_format and was_truncated else 0,
+        "sdpo_reference_eligible": bool(correct and not was_truncated and not repeated_final_box),
         "feedback": feedback,
     }

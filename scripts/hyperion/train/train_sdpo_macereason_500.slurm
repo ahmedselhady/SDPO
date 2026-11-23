@@ -151,6 +151,7 @@ mkdir -p "$DATA_DIR" "$CHECKPOINT_DIR" "$HF_HOME" "$HF_DATASETS_CACHE"
 
 "$NOTIFY" "Launching verl.trainer.main_ppo; live training progress follows" || true
 "$NOTIFY" "Ray resources: cpus=$RAY_NUM_CPUS object_store_memory=${RAY_OBJECT_STORE_MEMORY}B" || true
+training_status=0
 "${python_cmd[@]}" -m verl.trainer.main_ppo --config-name sdpo \
     "vars.dir=$SDPO_DIR" \
     "vars.task=$TASK" \
@@ -166,7 +167,7 @@ mkdir -p "$DATA_DIR" "$CHECKPOINT_DIR" "$HF_HOME" "$HF_DATASETS_CACHE"
     "actor_rollout_ref.actor.fsdp_config.use_meta_init=False" \
     "actor_rollout_ref.ref.fsdp_config.use_meta_init=False" \
     "actor_rollout_ref.rollout.tensor_model_parallel_size=1" \
-    "actor_rollout_ref.rollout.n=8" \
+    "actor_rollout_ref.rollout.n=32" \
     "actor_rollout_ref.actor.ppo_mini_batch_size=$TRAIN_BATCH_SIZE" \
     "actor_rollout_ref.actor.self_distillation.solution_reference_language=$reference_language" \
     "trainer.project_name=SDPO-multilingual" \
@@ -175,13 +176,48 @@ mkdir -p "$DATA_DIR" "$CHECKPOINT_DIR" "$HF_HOME" "$HF_DATASETS_CACHE"
     "trainer.nnodes=1" \
     "trainer.n_gpus_per_node=4" \
     "trainer.total_epochs=1" \
-    "trainer.save_freq=25" \
-    "trainer.test_freq=-1" \
+    "trainer.save_freq=50" \
+    "trainer.test_freq=50" \
     "trainer.val_before_train=False" \
     "trainer.resume_mode=disable" \
     "trainer.default_local_dir=$CHECKPOINT_DIR" \
-    "trainer.max_actor_ckpt_to_keep=2" \
+    "trainer.max_actor_ckpt_to_keep=null" \
     "ray_kwargs.ray_init.num_cpus=$RAY_NUM_CPUS" \
-    "+ray_kwargs.ray_init.object_store_memory=$RAY_OBJECT_STORE_MEMORY"
+    "+ray_kwargs.ray_init.object_store_memory=$RAY_OBJECT_STORE_MEMORY" || training_status=$?
 
-"$NOTIFY" "✅ $TAG finished successfully" || true
+printf '[checkpoint upload] Trainer exited with status %s. Checking %s\n' "$training_status" "$CHECKPOINT_DIR"
+exporter="$SDPO_DIR/scripts/hyperion/eval/export_checkpoint_to_hub.sh"
+uploaded=0
+upload_failures=0
+for checkpoint in "$CHECKPOINT_DIR"/global_step_*; do
+    step_name="${checkpoint##*/}"
+    [[ "$step_name" =~ ^global_step_[0-9]+$ && -d "$checkpoint/actor" ]] || continue
+
+    export_dir="$checkpoint-hf"
+    export_args=()
+    if [[ -d "$export_dir" ]]; then
+        export_args+=(--upload-only)
+    fi
+    printf '[checkpoint upload] Processing %s\n' "$checkpoint"
+    # Derive a separate Hub repository ID from each checkpoint's path.
+    if env -u HF_REPO_ID HF_OUTPUT_DIR="$export_dir" HF_HUB_DISABLE_PROGRESS_BARS=1 \
+        SDPO_CONTAINER_IMAGE="$CONTAINER_IMAGE" SDPO_CONTAINER_ENV="$CONTAINER_ENV" \
+        "$exporter" "${export_args[@]}" "$checkpoint"; then
+        ((uploaded += 1))
+        printf '[checkpoint upload] Uploaded %s\n' "$checkpoint"
+    else
+        ((upload_failures += 1))
+        printf '[checkpoint upload] Failed for %s\n' "$checkpoint" >&2
+    fi
+done
+printf '[checkpoint upload] Uploaded %s checkpoint(s), %s failed.\n' "$uploaded" "$upload_failures"
+
+if (( training_status != 0 || upload_failures != 0 )); then
+    "$NOTIFY" "❌ $TAG trainer exit=$training_status, checkpoints uploaded=$uploaded, upload failures=$upload_failures" || true
+    if (( training_status != 0 )); then
+        exit "$training_status"
+    fi
+    exit 1
+fi
+
+"$NOTIFY" "✅ $TAG finished successfully, checkpoints uploaded=$uploaded" || true
