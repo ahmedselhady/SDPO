@@ -857,7 +857,13 @@ class RayPPOTrainer:
             solution_section = ""
             if has_solution:
                 if reasoning_only:
-                    solution_section = f"\n\nReference reasoning:\n{solution}\n"
+                    source_language = language_label(solution_idx, "the reference language")
+                    target_language = language_label(i, "the language of the original question")
+                    solution_section = (
+                        f"\n\nHere is how you reasoned about this problem when prompted in {source_language}. "
+                        f"Use a similar reasoning approach to solve it in {target_language}.\n\n"
+                        f"Reference reasoning:\n{solution}\n"
+                    )
                 else:
                     if not remove_thinking:
                         solution = format_full_reasoning_reference(solution)

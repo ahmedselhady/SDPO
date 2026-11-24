@@ -903,6 +903,8 @@ class ActorRolloutRefWorker(Worker, DistProfilerExtension):
                         )
                     else:
                         self.actor.teacher_module = self.ref_module_fsdp
+                        if self_distillation_cfg.get("teacher_update_rate", 0.0) == 0.0:
+                            self.actor.teacher_module.eval()
 
         if self._is_actor:
             self.flops_counter = FlopsCounter(self.actor_model_config)

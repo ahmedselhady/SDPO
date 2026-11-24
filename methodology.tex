@@ -1,0 +1,135 @@
+\documentclass[11pt]{article}
+\usepackage{amsmath}
+\usepackage[hidelinks]{hyperref}
+
+\begin{document}
+
+\section{Methodology}
+\label{sec:sdpo-methodology}
+
+We adapt Self-Distillation Policy Optimization (SDPO)
+\cite{hubotter2026sdpo} to multilingual mathematical reasoning.
+During training, a verifier identifies successful attempts, and reasoning
+from verified English attempts provides additional context to a self-teacher.
+The student learns from the teacher's next-token distributions on failed
+attempts and from a group-relative policy objective on successful attempts.
+At inference, the student receives the problem in the requested language
+without a reference or verifier feedback.
+
+\paragraph{Parallel problems and outcome verification.}
+We organize mAceReason-Math examples into parallel groups, each containing
+one version of the same problem per training language. A training batch
+contains two complete groups. For each localized prompt \(x_i\), the
+rollout policy samples 32 responses. The verifier extracts the last boxed
+answer from the final response and assigns a binary reward. It first checks
+for an exact match and then checks mathematical equivalence if needed.
+
+\paragraph{English reference selection and teacher conditioning.}
+For each failed response, we sample uniformly from eligible rollouts
+generated from the English prompt in the same parallel group. A candidate
+must have a correct final answer, a nonempty closed reasoning trace, and
+no truncation or repeated-final-answer flag. We discard the final response
+following the reasoning trace and cut the trace before the line containing
+the first detected explicit answer cue. We append the extracted reasoning
+to the original localized prompt and ask the teacher to solve the problem
+using a similar approach in the target language. If no eligible reference
+is available, the teacher can instead receive verifier feedback about
+truncation or a missing boxed answer. Failed responses with neither form
+of context, or whose augmented teacher prompts exceed the token budget,
+are masked out of the distillation objective.
+
+\paragraph{Token-level self-distillation.}
+Let \(x_i\) be the original math problem prompt in the target language
+\(\ell_i\). Let \(y_i=(y_{i,1},\ldots,y_{i,T_i})\) be a response sampled
+from the rollout policy conditioned on \(x_i\), where \(T_i\) is the number
+of response tokens and \(y_{i,<t}=(y_{i,1},\ldots,y_{i,t-1})\) is the
+response prefix before position \(t\).
+
+For a failed response \(y_i\) with an eligible English reference, let
+\(j(i)\) index the selected verified English rollout from the same
+parallel group. Its extracted
+reasoning is \(r_i^{\mathrm{en}} =
+\operatorname{ExtractReasoning}(y_{j(i)})\). The augmented teacher prompt is
+\begin{equation}
+\hat{x}_i =
+\underbrace{x_i}_{\text{original localized prompt}}
+\;\Vert\;
+\underbrace{\operatorname{ReferenceSection}
+  (r_i^{\mathrm{en}},\ell_i)}_{\text{English reasoning and its framing}}
+\;\Vert\;
+\underbrace{\operatorname{Reminder}(\ell_i)}_{\text{target-language reminder}}.
+\label{eq:sdpo-teacher-prompt}
+\end{equation}
+Here \(\Vert\) denotes concatenation within the user message. The reference
+section contains the English reasoning trace and instructs the teacher to
+apply a similar approach in \(\ell_i\). For a feedback-only failure,
+\(\hat{x}_i\) is built from \(x_i\) and the verifier feedback using the
+feedback prompt template.
+
+Using the teacher prompt from Eq.~\eqref{eq:sdpo-teacher-prompt}, at each
+valid response position \(t\), the student and teacher predict over
+the same vocabulary \(\mathcal V\) using the same previously sampled tokens
+\(y_{i,<t}\). For any candidate next token \(v\in\mathcal V\),
+\begin{align}
+p_{i,t}(v) &= \pi_\theta(v\mid x_i,y_{i,<t}), \\
+q_{i,t}(v) &= \pi_{\bar\theta}(v\mid\hat{x}_i,y_{i,<t}).
+\label{eq:sdpo-next-token-distributions}
+\end{align}
+The English reference thus enters through the teacher's conditioning context
+at every response position. The teacher forward pass is detached, and its
+parameters track the student through an exponential moving average,
+\(\bar\theta\leftarrow 0.95\bar\theta + 0.05\theta\).
+
+Let \(S_{i,t}\) contain the student's 512 highest-probability tokens at
+position \(t\). For each distribution \(u\in\{p_{i,t},q_{i,t}\}\), we
+retain \(u(v)\) for \(v\in S_{i,t}\) and assign the remaining mass
+\(1-\sum_{v\in S_{i,t}}u(v)\) to a single tail category. Denote the resulting
+distributions by \(p^*_{i,t}\) and \(q^*_{i,t}\). The per-token divergence is
+\begin{equation}
+d_{i,t}=\operatorname{JSD}_{\alpha}(p^*_{i,t},q^*_{i,t}).
+\label{eq:sdpo-token-divergence}
+\end{equation}
+The generalized Jensen--Shannon divergence uses weights \(1-\alpha\) for
+the student and \(\alpha\) for the teacher, with both KL terms evaluated
+against their weighted mixture. The default \(\alpha=0.5\)
+yields the symmetric Jensen--Shannon divergence.
+
+Let \(b_{i,t}\) indicate a valid response token and \(s_i\) indicate a
+failed response with usable teacher context. Under the hybrid policy update,
+the distillation term is
+\begin{equation}
+\mathcal L_{\mathrm{SDPO}} =
+\frac{\sum_{i,t} b_{i,t}s_i\,w_{i,t}\,d_{i,t}}
+     {\max(1,\sum_{i,t} b_{i,t})}.
+\label{eq:sdpo-loss}
+\end{equation}
+The weight \(w_{i,t}\) includes the detached current-to-old policy
+probability ratio for \(y_{i,t}\), capped at 2, and multiplies it by the
+token-level rollout importance weight when available.
+
+\paragraph{Hybrid policy update.}
+For each localized prompt, we compute a GRPO advantage by subtracting the
+mean reward across its sampled responses from each response's reward.
+The mean includes both successful and failed attempts, and the advantage
+is used without standard-deviation normalization. Successful responses
+contribute a clipped policy-gradient loss. Failed responses with usable
+teacher context contribute the distillation loss. Both contributions are
+normalized by the full count of valid response tokens in the loss
+reduction. The actor also receives a KL penalty against the fixed
+reference policy with coefficient \(10^{-3}\).
+
+\paragraph{Training configuration.}
+The default mAceReason recipe uses Nemotron-Research-Reasoning-Qwen-1.5B,
+up to 500 parallel problem groups, and one epoch at a learning rate of
+\(3\times10^{-6}\). The default languages are Bengali, English, Spanish,
+Telugu, and Thai. The augmented teacher prompt has a budget of 10,752
+tokens before the sampled response is appended.
+
+\begin{thebibliography}{1}
+\bibitem{hubotter2026sdpo}
+J.~H\"ubotter et al.
+\newblock Reinforcement Learning via Self-Distillation.
+\newblock \href{https://arxiv.org/abs/2601.20802}{arXiv:2601.20802}, 2026.
+\end{thebibliography}
+
+\end{document}

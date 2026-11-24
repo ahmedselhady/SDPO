@@ -19,15 +19,9 @@ cd "$SCRIPT_DIR"
 mkdir -p .slurm
 
 models=(
-    "ahmedselhady/macereason-math-500x6-nemotron-1.5b-global_step_250"
-    "ahmedselhady/macereason-math-500x6-nemotron-1.5b-global_step_150"
-    "ahmedselhady/macereason-math-500x6-nemotron-1.5b-global_step_200"
-    "ahmedselhady/macereason-math-500x6-nemotron-1.5b-global_step_225"
-    "ahmedselhady/macereason-math-500x6-nemotron-1.5b-global_step_175"
-    "ahmedselhady/macereason-math-500x6-nemotron-1.5b-global_step_125"
+    "Qwen/Qwen3.5-9B"
     # "Qwen/Qwen3.5-2B"
     # "Qwen/Qwen3.5-4B"
-    # "Qwen/Qwen3.5-9B"
     # "Qwen/Qwen3.5-0.8B"
     # "Qwen/Qwen3.5-27B"
     # "nvidia/Nemotron-Research-Reasoning-Qwen-1.5B"

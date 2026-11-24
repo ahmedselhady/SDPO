@@ -73,6 +73,15 @@ CONTAINER_IMAGE="${SDPO_CONTAINER_IMAGE:-/scratch/asalem/SDPO-qwen35-vllm-0.19.1
 CONTAINER_ENV="${SDPO_CONTAINER_ENV:-/scratch/asalem/SDPO-qwen35-container-venv}"
 MODEL_PATH="${MODEL_PATH:-nvidia/Nemotron-Research-Reasoning-Qwen-1.5B}"
 TEACHER_PROMPT_TOKENS=10752
+SDPO_ALPHA="${SDPO_ALPHA:-0.5}"
+if [[ ! "$SDPO_ALPHA" =~ ^(0(\.[0-9]+)?|1(\.0+)?)$ ]]; then
+    printf 'ERROR: SDPO_ALPHA must be a decimal between 0 and 1.\n' >&2
+    exit 1
+fi
+alpha_tag=""
+if [[ "$SDPO_ALPHA" != 0.5 ]]; then
+    alpha_tag="-alpha${SDPO_ALPHA}"
+fi
 LEARNING_RATE="${LEARNING_RATE:-3e-6}"
 USE_KL_LOSS="${USE_KL_LOSS:-True}"
 KL_LOSS_COEF="${KL_LOSS_COEF:-0.001}"
@@ -84,9 +93,9 @@ case "${USE_KL_LOSS,,}" in
         exit 1
         ;;
 esac
-EXPERIMENT="${EXPERIMENT:-macereason-math-${DATASET_TAG}-nemotron-1.5b-8gpu-lr${LEARNING_RATE}-${kl_tag}-reasoning-ref${TEACHER_PROMPT_TOKENS}-k512-gs}"
+EXPERIMENT="${EXPERIMENT:-macereason-math-${DATASET_TAG}-nemotron-1.5b-8gpu-lr${LEARNING_RATE}-${kl_tag}-full-ref${TEACHER_PROMPT_TOKENS}-k512-frozen}"
 CACHE_DIR="${CACHE_DIR:-/scratch/asalem/.cache/huggingface}"
-CHECKPOINT_DIR="${CHECKPOINT_DIR:-$SDPO_DIR/checkpoints/$EXPERIMENT-$reference_language}"
+CHECKPOINT_DIR="${CHECKPOINT_DIR:-$SDPO_DIR/checkpoints/$EXPERIMENT-$reference_language${alpha_tag}}"
 ROLLOUT_DATA_DIR="${ROLLOUT_DATA_DIR:-$CHECKPOINT_DIR/rollouts}"
 LOG_TEACHER_PROMPTS="${LOG_TEACHER_PROMPTS:-3}"
 
@@ -165,6 +174,7 @@ mkdir -p "$DATA_DIR" "$CHECKPOINT_DIR" "$HF_HOME" "$HF_DATASETS_CACHE"
 
 "$NOTIFY" "Launching verl.trainer.main_ppo; live training progress follows" || true
 printf 'Actor learning rate=%s reference KL enabled=%s coefficient=%s\n' "$LEARNING_RATE" "$USE_KL_LOSS" "$KL_LOSS_COEF"
+printf 'SDPO alpha=%s\n' "$SDPO_ALPHA"
 printf 'Training rollout dumps: %s\n' "$ROLLOUT_DATA_DIR"
 "$NOTIFY" "Ray resources: cpus=$RAY_NUM_CPUS object_store_memory=${RAY_OBJECT_STORE_MEMORY}B" || true
 training_status=0
@@ -191,16 +201,18 @@ training_status=0
     "actor_rollout_ref.actor.calculate_entropy=True" \
     "actor_rollout_ref.actor.entropy_coeff=0" \
     "actor_rollout_ref.actor.self_distillation.remove_thinking_from_demonstration=False" \
-    "actor_rollout_ref.actor.self_distillation.reference_reasoning_only=True" \
+    "actor_rollout_ref.actor.self_distillation.reference_reasoning_only=False" \
+    "actor_rollout_ref.actor.self_distillation.alpha=$SDPO_ALPHA" \
     "actor_rollout_ref.actor.self_distillation.distillation_topk=512" \
     "actor_rollout_ref.actor.self_distillation.distillation_add_tail=True" \
-    "actor_rollout_ref.actor.self_distillation.grpo_on_success=True" \
+    "actor_rollout_ref.actor.self_distillation.grpo_on_success=False" \
+    "actor_rollout_ref.actor.self_distillation.teacher_update_rate=0.0" \
     "actor_rollout_ref.actor.self_distillation.max_reprompt_len=$TEACHER_PROMPT_TOKENS" \
     "actor_rollout_ref.actor.self_distillation.solution_reference_language=$reference_language" \
     "actor_rollout_ref.actor.self_distillation.log_teacher_prompts=$LOG_TEACHER_PROMPTS" \
     "trainer.project_name=SDPO-multilingual" \
     "trainer.group_name=macereason-math-$MAX_TRAIN_GROUPS" \
-    "trainer.experiment_name=$EXPERIMENT" \
+    "trainer.experiment_name=$EXPERIMENT${alpha_tag}" \
     "trainer.nnodes=1" \
     "trainer.n_gpus_per_node=8" \
     "trainer.total_epochs=1" \
