@@ -57,7 +57,12 @@ from verl.trainer.ppo.metric_utils import (
 from verl.trainer.ppo.reward import compute_reward, compute_reward_async
 from verl.trainer.ppo.utils import Role, WorkerType, need_critic, need_reference_policy, need_reward_model
 from verl.utils import tensordict_utils as tu
-from verl.utils.chat_template import format_full_reasoning_reference, strip_thinking_trace
+from verl.utils.chat_template import (
+    extract_reference_reasoning,
+    format_full_reasoning_reference,
+    reference_reasoning_reminder,
+    strip_thinking_trace,
+)
 from verl.utils.checkpoint.checkpoint_manager import find_latest_ckpt_path, should_save_ckpt_esi
 from verl.utils.config import omega_conf_to_dataclass
 from verl.utils.debug import marked_timer
@@ -742,7 +747,10 @@ class RayPPOTrainer:
         if response_texts is None:
             response_texts = self._decode_rollout_responses(batch)
         remove_thinking = self_distillation_cfg.get("remove_thinking_from_demonstration", False)
-        if remove_thinking:
+        reasoning_only = self_distillation_cfg.get("reference_reasoning_only", False)
+        if reasoning_only:
+            response_texts = [extract_reference_reasoning(text) for text in response_texts]
+        elif remove_thinking:
             response_texts = [strip_thinking_trace(text) for text in response_texts]
         prompt_texts = [msgs[-1]["content"] for msgs in batch.non_tensor_batch["raw_prompt"]]
         batch_size = batch.batch.batch_size[0]
@@ -848,21 +856,24 @@ class RayPPOTrainer:
             # build solution section
             solution_section = ""
             if has_solution:
-                if not remove_thinking:
-                    solution = format_full_reasoning_reference(solution)
-                example_language = language_label(solution_idx, "unknown")
-                if localized_reference:
-                    instruction = localized_reference.format(reference_language=example_language)
-                    solution_section = f"\n\n{instruction}\n\n{solution}\n"
-                elif successful:
-                    solution_section = self_distillation_cfg.solution_template.format(
-                        successful_previous_attempt=solution, reference_language=example_language
-                    )
+                if reasoning_only:
+                    solution_section = f"\n\nReference reasoning:\n{solution}\n"
                 else:
-                    solution_section = (
-                        f"\nUnverified reference rollout. Its requested language was {example_language}. "
-                        f"Check it for mistakes before using it.\n\n{solution}\n"
-                    )
+                    if not remove_thinking:
+                        solution = format_full_reasoning_reference(solution)
+                    example_language = language_label(solution_idx, "unknown")
+                    if localized_reference:
+                        instruction = localized_reference.format(reference_language=example_language)
+                        solution_section = f"\n\n{instruction}\n\n{solution}\n"
+                    elif successful:
+                        solution_section = self_distillation_cfg.solution_template.format(
+                            successful_previous_attempt=solution, reference_language=example_language
+                        )
+                    else:
+                        solution_section = (
+                            f"\nUnverified reference rollout. Its requested language was {example_language}. "
+                            f"Check it for mistakes before using it.\n\n{solution}\n"
+                        )
 
             # build feedback section
             feedback_section = ""
@@ -872,7 +883,11 @@ class RayPPOTrainer:
                 )
 
             # combine solution and feedback sections
-            if localized_reference:
+            if reasoning_only and has_solution:
+                language_code = language_codes[i]
+                reminder = reference_reasoning_reminder(language_code, language_label(i, "the original language"))
+                reprompt_text = f"{prompt_texts[i]}{solution_section}{feedback_section}\n{reminder}"
+            elif localized_reference:
                 reprompt_text = f"{prompt_texts[i]}{solution_section}{feedback_section}"
             else:
                 reprompt_text = self_distillation_cfg.reprompt_template.format(

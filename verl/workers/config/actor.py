@@ -54,6 +54,7 @@ class SelfDistillationConfig(BaseConfig):
         grpo_on_success (bool): Route successful rollouts to GRPO and failed rollouts to SDPO.
         dont_reprompt_on_self_success (bool): Whether to not reprompt on self-success.
         remove_thinking_from_demonstration (bool): Whether to remove <think>...</think> tags from successful demonstrations before reprompting.
+        reference_reasoning_only (bool): Use only the reasoning before explicit answer cues in English references.
         is_clip (Optional[float]): Clip value for distillation IS ratio; None disables IS weighting.
         reprompt_template (str): Template for reprompting. Uses {prompt}, {solution}, {feedback} placeholders.
         solution_template (str): Template for the solution section, with {successful_previous_attempt} and {reference_language}.
@@ -81,6 +82,7 @@ class SelfDistillationConfig(BaseConfig):
     dont_reprompt_on_self_success: bool = False
     grpo_on_success: bool = False
     remove_thinking_from_demonstration: bool = False
+    reference_reasoning_only: bool = False
     is_clip: Optional[float] = None
     reprompt_template: str = (
         "Write your reasoning and final answer in {response_language}. "
@@ -105,6 +107,12 @@ class SelfDistillationConfig(BaseConfig):
     allow_unverified_english_fallback: bool = False
 
     def __post_init__(self):
+        if self.reference_reasoning_only and (
+            self.remove_thinking_from_demonstration
+            or self.solution_reference_language != "en_only"
+            or self.allow_unverified_english_fallback
+        ):
+            raise ValueError("reference_reasoning_only requires verified English-only references with reasoning enabled.")
         if self.reprompt_truncation not in ("skip", "error", "left", "right"):
             raise ValueError(f"Invalid self_distillation.reprompt_truncation: {self.reprompt_truncation!r}")
         if self.log_teacher_prompts < 0:

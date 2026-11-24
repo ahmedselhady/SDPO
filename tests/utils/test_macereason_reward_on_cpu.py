@@ -1,6 +1,11 @@
 import pytest
 
-from verl.utils.chat_template import format_full_reasoning_reference, strip_thinking_trace
+from verl.utils.chat_template import (
+    extract_reference_reasoning,
+    format_full_reasoning_reference,
+    reference_reasoning_reminder,
+    strip_thinking_trace,
+)
 from verl.utils.reward_score import default_compute_score
 from verl.utils.reward_score.feedback import compute_score
 
@@ -55,3 +60,29 @@ def test_repeated_boxes_in_thinking_are_ineligible_as_full_references():
     result = default_compute_score("macereason_math", text, "42")
     assert result["acc"] == 1.0
     assert not result["sdpo_reference_eligible"]
+
+
+@pytest.mark.parametrize(
+    "trace, expected",
+    [
+        ("<think>Factor the polynomial.\nx = 42, so " r"\boxed{42}." "\nMore text.</think>42", "Factor the polynomial."),
+        ("Factor the polynomial.\n**Final answer:** 42\nMore text.</think>42", "Factor the polynomial."),
+        ("Factor the polynomial.</think>Final answer: 42", "Factor the polynomial."),
+        ("Conclusion: 42</think>42", ""),
+        ("Compute the terms.\nTherefore f(10)=504.</think>504", "Compute the terms."),
+        ("Compute the terms.\nTherefore likely candidate is 504.\nBut just verifying:</think>504", "Compute the terms."),
+        ("<think>Unfinished trace", ""),
+        ("42", ""),
+    ],
+)
+def test_reasoning_only_reference(trace, expected):
+    assert extract_reference_reasoning(trace) == expected
+
+
+def test_reasoning_reminder_covers_every_macereason_language():
+    import json
+    from pathlib import Path
+
+    prompt_file = Path(__file__).resolve().parents[2] / "data/macereason_math_prompts.json"
+    for language in json.loads(prompt_file.read_text()):
+        assert "TEST_FALLBACK" not in reference_reasoning_reminder(language, "TEST_FALLBACK")

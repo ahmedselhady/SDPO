@@ -5,7 +5,7 @@
 #SBATCH --cpus-per-task=16
 #SBATCH --gres=gpu:4
 #SBATCH --mem=100gb
-#SBATCH --time=1-00:00:00
+#SBATCH --time=2-00:00:00
 #SBATCH --output=/scratch/asalem/repos/SDPO/.slurm/%x-%j.out
 #SBATCH --error=/scratch/asalem/repos/SDPO/.slurm/%x-%j.err
 
@@ -35,8 +35,11 @@ if [[ ! "$MAX_TRAIN_GROUPS" =~ ^([2-9]|[1-9][0-9]+)$ ]]; then
     exit 1
 fi
 # Use comma-separated language codes.
-DEFAULT_LANGUAGES="bn,en,es,te,th,zh" # "bn,de,en,es,fr,it,ja,ko,pt,ru,sw,te,th,zh"
+DEFAULT_LANGUAGES="bn,en,es,te,th" # "bn,de,en,es,fr,it,ja,ko,pt,ru,sw,te,th,zh"
 dataset_languages="${LANGUAGES-$DEFAULT_LANGUAGES}"
+if [[ "$dataset_languages" == all ]]; then
+    dataset_languages="bn,de,en,es,fr,it,ja,ko,pt,ru,sw,te,th,zh"
+fi
 if [[ ! "$dataset_languages" =~ ^[a-z]{2,3}(,[a-z]{2,3})*$ ]]; then
     printf '%s\n' 'ERROR: LANGUAGES must be comma-separated lowercase language codes.' >&2
     exit 1
@@ -51,18 +54,10 @@ for language in "${language_codes[@]}"; do
     seen_languages+="$language,"
 done
 
-# Restrict references to English prompts by default. Use en to prefer English or any to mix languages.
+# English reasoning references require an English prompt for each parallel group.
 reference_language="${SOLUTION_REFERENCE_LANGUAGE:-en_only}"
-case "$reference_language" in
-    en|en_only|any) ;;
-    *)
-        printf '%s\n' 'ERROR: SOLUTION_REFERENCE_LANGUAGE must be en, en_only, or any.' >&2
-        exit 1
-        ;;
-esac
-
-if [[ "$reference_language" == en_only && "$seen_languages" != *,en,* ]]; then
-    printf '%s\n' 'ERROR: en_only requires en in LANGUAGES.' >&2
+if [[ "$reference_language" != en_only || "$seen_languages" != *,en,* ]]; then
+    printf '%s\n' 'ERROR: This recipe requires SOLUTION_REFERENCE_LANGUAGE=en_only and English in LANGUAGES.' >&2
     exit 1
 fi
 
@@ -79,7 +74,7 @@ CONTAINER_ENV="${SDPO_CONTAINER_ENV:-/scratch/asalem/SDPO-qwen35-container-venv}
 MODEL_PATH="${MODEL_PATH:-nvidia/Nemotron-Research-Reasoning-Qwen-1.5B}"
 TEACHER_PROMPT_TOKENS=10752
 LEARNING_RATE="${LEARNING_RATE:-3e-6}"
-USE_KL_LOSS="${USE_KL_LOSS:-False}"
+USE_KL_LOSS="${USE_KL_LOSS:-True}"
 KL_LOSS_COEF="${KL_LOSS_COEF:-0.001}"
 case "${USE_KL_LOSS,,}" in
     true) kl_tag="kl${KL_LOSS_COEF}" ;;
@@ -89,7 +84,7 @@ case "${USE_KL_LOSS,,}" in
         exit 1
         ;;
 esac
-EXPERIMENT="${EXPERIMENT:-macereason-math-${DATASET_TAG}-nemotron-1.5b-lr${LEARNING_RATE}-${kl_tag}-full-ref${TEACHER_PROMPT_TOKENS}-gs}"
+EXPERIMENT="${EXPERIMENT:-macereason-math-${DATASET_TAG}-nemotron-1.5b-lr${LEARNING_RATE}-${kl_tag}-reasoning-ref${TEACHER_PROMPT_TOKENS}-k512-gs}"
 CACHE_DIR="${CACHE_DIR:-/scratch/asalem/.cache/huggingface}"
 CHECKPOINT_DIR="${CHECKPOINT_DIR:-$SDPO_DIR/checkpoints/$EXPERIMENT-$reference_language}"
 ROLLOUT_DATA_DIR="${ROLLOUT_DATA_DIR:-$CHECKPOINT_DIR/rollouts}"
@@ -196,6 +191,9 @@ training_status=0
     "actor_rollout_ref.actor.calculate_entropy=True" \
     "actor_rollout_ref.actor.entropy_coeff=0" \
     "actor_rollout_ref.actor.self_distillation.remove_thinking_from_demonstration=False" \
+    "actor_rollout_ref.actor.self_distillation.reference_reasoning_only=True" \
+    "actor_rollout_ref.actor.self_distillation.distillation_topk=512" \
+    "actor_rollout_ref.actor.self_distillation.distillation_add_tail=True" \
     "actor_rollout_ref.actor.self_distillation.grpo_on_success=True" \
     "actor_rollout_ref.actor.self_distillation.max_reprompt_len=$TEACHER_PROMPT_TOKENS" \
     "actor_rollout_ref.actor.self_distillation.solution_reference_language=$reference_language" \

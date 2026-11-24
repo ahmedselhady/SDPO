@@ -133,7 +133,14 @@ class TaskRunner:
             if config.algorithm.adv_estimator != "grpo":
                 raise ValueError("SDPO grpo_on_success requires algorithm.adv_estimator=grpo.")
         if self_distillation_needs_ref and need_reference_policy(config):
-            raise ValueError("SDPO cannot share the reference policy with KL regularization.")
+            model = config.actor_rollout_ref.model
+            lora_rank = max(model.get("lora", {}).get("rank", 0), model.get("lora_rank", 0))
+            if config.actor_rollout_ref.actor.strategy not in {"fsdp", "fsdp2"} or (
+                lora_rank > 0 or model.get("lora_adapter_path") is not None
+            ):
+                raise ValueError("SDPO with KL requires full-parameter FSDP training and a separate reference policy.")
+            # ActorRolloutRef owns the SDPO teacher. add_ref_policy_worker registers
+            # a separate RefPolicy role whose weights remain frozen for KL.
         if self_distillation_needs_ref and use_legacy_worker_impl == "disable":
             raise ValueError(
                 "SDPO requires the legacy worker implementation to colocate the teacher."

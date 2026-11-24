@@ -49,7 +49,11 @@ def reduce_metrics(metrics: dict[str, Union["Metric", list[Any]]]) -> dict[str, 
     for key, val in metrics.items():
         if isinstance(val, Metric):
             metrics[key] = val.aggregate()
-        elif "max" in key:
+            continue
+        # Workers may log this metric for different numbers of microbatches.
+        if isinstance(val, list) and any(isinstance(item, list) for item in val):
+            val = [sample for item in val for sample in (item if isinstance(item, list) else [item])]
+        if "max" in key:
             metrics[key] = np.max(val)
         elif "min" in key:
             metrics[key] = np.min(val)

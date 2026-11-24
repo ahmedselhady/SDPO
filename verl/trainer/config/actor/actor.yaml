@@ -123,6 +123,9 @@ self_distillation:
   # Whether to remove <think>...</think> tags from successful demonstrations before reprompting
   remove_thinking_from_demonstration: True
 
+  # Use the reasoning before explicit answer cues in verified English references.
+  reference_reasoning_only: false
+
   # Dataset column shared by translations of the same problem; falls back to rollout uid when absent
   solution_group_key: parallel_id
 

@@ -13,11 +13,11 @@ REPO_ROOT = Path(__file__).resolve().parents[3]
 
 # Each pattern matches a language-level result, including MMLU-ProX group scores.
 TASKS = (
-    (r"macereason_math_([a-z]{2,3})", "macereason_math", "", "math_verify,none"),
-    (r"macereason_math_([a-z]{2,3})_train", "macereason_math_train", "", "math_verify,none"),
-    (r"mmlu_prox_([a-z]{2,3})", "mmlu_prox", "", "exact_match,custom-extract"),
-    (r"mgpqa_main_native_cot_zeroshot_([a-z]{2,3})", "mgpqa", "Native CoT", "exact_match,flexible-extract"),
-    (r"mgpqa_main_english_cot_zeroshot_([a-z]{2,3})", "mgpqa", "English CoT", "exact_match,flexible-extract"),
+    (r"macereason_math_([a-z]{2,3})", "macereason_math", ""),
+    (r"macereason_math_([a-z]{2,3})_train", "macereason_math_train", ""),
+    (r"mmlu_prox_([a-z]{2,3})", "mmlu_prox", ""),
+    (r"mgpqa_main_native_cot_zeroshot_([a-z]{2,3})", "mgpqa", "Native CoT"),
+    (r"mgpqa_main_english_cot_zeroshot_([a-z]{2,3})", "mgpqa", "English CoT"),
 )
 
 LATEX_ESCAPE = str.maketrans({
@@ -29,30 +29,42 @@ LATEX_ESCAPE = str.maketrans({
 
 def load_scores(results_dir):
     scores = defaultdict(dict)
-    # lm-eval embeds a sortable ISO timestamp in each result filename.
-    for path in sorted(results_dir.rglob("results_*.json"), key=lambda p: (p.name, p)):
+    for path in results_dir.rglob("results_*.json"):
         with path.open(encoding="utf-8") as source:
             report = json.load(source)
         model = report.get("model_name") or path.parent.name.replace("__", "/")
         results = {**report.get("results", {}), **(report.get("groups") or {})}
         for task, metrics in results.items():
-            for pattern, benchmark, variant, metric in TASKS:
+            for pattern, benchmark, variant in TASKS:
                 match = re.fullmatch(pattern, task)
                 if match is None:
                     continue
-                score = metrics.get(metric)
-                if type(score) in (int, float) and math.isfinite(score):
-                    scores[benchmark, variant, metric][model, match[1]] = score
+                # lm-eval stores scores as "metric,filter" and errors as "metric_stderr,filter".
+                score = max(
+                    (
+                        value
+                        for key, value in metrics.items()
+                        if "," in key
+                        and not key.split(",", 1)[0].endswith("_stderr")
+                        and type(value) in (int, float)
+                        and math.isfinite(value)
+                    ),
+                    default=None,
+                )
+                if score is not None:
+                    cells = scores[benchmark, variant]
+                    cell = model, match[1]
+                    cells[cell] = max(score, cells.get(cell, score))
                 break
     return scores
 
 
-def render_table(scores, variant, metric):
+def render_table(scores, variant):
     models = sorted({model for model, _ in scores})
     languages = sorted({language for _, language in scores}, key=lambda lang: (lang != "en", lang))
     end_row = r" \\"
     columns = len(languages) + 2
-    lines = [f"% {metric} (percent)", r"\begin{tabular}{l" + "r" * (columns - 1) + "}", r"\hline"]
+    lines = ["% Highest score across metrics and runs (percent)", r"\begin{tabular}{l" + "r" * (columns - 1) + "}", r"\hline"]
     if variant:
         lines.append(r"\multicolumn{" + str(columns) + "}{l}{" + variant + "}" + end_row)
     lines.extend([" & ".join(["Model"] + languages + ["Avg"]) + end_row, r"\hline"])
@@ -79,10 +91,10 @@ def main():
         parser.error(f"No supported benchmark scores found under {args.results_dir}")
 
     tables = defaultdict(list)
-    for _, benchmark, variant, metric in TASKS:
-        cells = scores.get((benchmark, variant, metric))
+    for _, benchmark, variant in TASKS:
+        cells = scores.get((benchmark, variant))
         if cells:
-            tables[benchmark].append(render_table(cells, variant, metric))
+            tables[benchmark].append(render_table(cells, variant))
 
     output_dir = args.output_dir or args.results_dir / "tables"
     output_dir.mkdir(parents=True, exist_ok=True)
