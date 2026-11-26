@@ -39,6 +39,5 @@ MMLU_PROX_TASKS=(
 
 EVAL_TASKS=(
     "${MACEREASON_TASKS[@]}"
-    "${MGPQA_TASKS[@]}"
 )
     # "${MMLU_PROX_TASKS[@]}"

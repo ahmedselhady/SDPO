@@ -54,10 +54,13 @@ for language in "${language_codes[@]}"; do
     seen_languages+="$language,"
 done
 
-# English reasoning references require an English prompt for each parallel group.
 reference_language="${SOLUTION_REFERENCE_LANGUAGE:-en_only}"
-if [[ "$reference_language" != en_only || "$seen_languages" != *,en,* ]]; then
-    printf '%s\n' 'ERROR: This recipe requires SOLUTION_REFERENCE_LANGUAGE=en_only and English in LANGUAGES.' >&2
+if [[ "$reference_language" != en_only && "$reference_language" != any ]]; then
+    printf '%s\n' 'ERROR: SOLUTION_REFERENCE_LANGUAGE must be en_only or any.' >&2
+    exit 1
+fi
+if [[ "$reference_language" == en_only && "$seen_languages" != *,en,* ]]; then
+    printf '%s\n' 'ERROR: SOLUTION_REFERENCE_LANGUAGE=en_only requires en in LANGUAGES.' >&2
     exit 1
 fi
 
@@ -73,7 +76,7 @@ CONTAINER_IMAGE="${SDPO_CONTAINER_IMAGE:-/scratch/asalem/SDPO-qwen35-vllm-0.19.1
 CONTAINER_ENV="${SDPO_CONTAINER_ENV:-/scratch/asalem/SDPO-qwen35-container-venv}"
 MODEL_PATH="${MODEL_PATH:-nvidia/Nemotron-Research-Reasoning-Qwen-1.5B}"
 TEACHER_PROMPT_TOKENS=10752
-SDPO_ALPHA="${SDPO_ALPHA:-0.5}"
+SDPO_ALPHA="${SDPO_ALPHA:-1}"
 if [[ ! "$SDPO_ALPHA" =~ ^(0(\.[0-9]+)?|1(\.0+)?)$ ]]; then
     printf 'ERROR: SDPO_ALPHA must be a decimal between 0 and 1.\n' >&2
     exit 1
@@ -93,9 +96,18 @@ case "${USE_KL_LOSS,,}" in
         exit 1
         ;;
 esac
+GRPO_ON_SUCCESS="${GRPO_ON_SUCCESS:-False}"
+case "${GRPO_ON_SUCCESS,,}" in
+    true) grpo_success_tag="-gs" ;;
+    false) grpo_success_tag="" ;;
+    *)
+        printf 'ERROR: GRPO_ON_SUCCESS must be True or False.\n' >&2
+        exit 1
+        ;;
+esac
 EXPERIMENT="${EXPERIMENT:-macereason-math-${DATASET_TAG}-nemotron-1.5b-lr${LEARNING_RATE}-${kl_tag}-full-ref${TEACHER_PROMPT_TOKENS}-k512-frozen}"
 CACHE_DIR="${CACHE_DIR:-/scratch/asalem/.cache/huggingface}"
-CHECKPOINT_DIR="${CHECKPOINT_DIR:-$SDPO_DIR/checkpoints/$EXPERIMENT-$reference_language${alpha_tag}}"
+CHECKPOINT_DIR="${CHECKPOINT_DIR:-$SDPO_DIR/checkpoints/$EXPERIMENT-$reference_language${alpha_tag}${grpo_success_tag}}"
 ROLLOUT_DATA_DIR="${ROLLOUT_DATA_DIR:-$CHECKPOINT_DIR/rollouts}"
 LOG_TEACHER_PROMPTS="${LOG_TEACHER_PROMPTS:-3}"
 
@@ -205,7 +217,7 @@ training_status=0
     "actor_rollout_ref.actor.self_distillation.alpha=$SDPO_ALPHA" \
     "actor_rollout_ref.actor.self_distillation.distillation_topk=512" \
     "actor_rollout_ref.actor.self_distillation.distillation_add_tail=True" \
-    "actor_rollout_ref.actor.self_distillation.grpo_on_success=False" \
+    "actor_rollout_ref.actor.self_distillation.grpo_on_success=$GRPO_ON_SUCCESS" \
     "actor_rollout_ref.actor.self_distillation.teacher_update_rate=0.0" \
     "actor_rollout_ref.actor.self_distillation.max_reprompt_len=$TEACHER_PROMPT_TOKENS" \
     "actor_rollout_ref.actor.self_distillation.solution_reference_language=$reference_language" \

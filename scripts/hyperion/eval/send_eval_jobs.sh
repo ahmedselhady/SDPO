@@ -18,17 +18,18 @@ fi
 cd "$SCRIPT_DIR"
 mkdir -p .slurm
 
+# The publisher keeps each run's default revision (main) on its latest checkpoint.
 models=(
-    "Qwen/Qwen3.5-9B"
-    # "Qwen/Qwen3.5-2B"
-    # "Qwen/Qwen3.5-4B"
-    # "Qwen/Qwen3.5-0.8B"
-    # "Qwen/Qwen3.5-27B"
-    # "nvidia/Nemotron-Research-Reasoning-Qwen-1.5B"
+    # "ahmedselhady/XSDPO-Nemotron-1.5B-1500x2-en-bn-lr3e-6-kl0.001-reasoning-ref10752-k512-gs-en_only"
+    # "ahmedselhady/XSDPO-Nemotron-1.5B-1500x2-en-bn-lr3e-6-no-kl-en"
+    "ahmedselhady/XSDPO-Nemotron-1.5B-300x5-lr3e-6-kl0.001-full-ref10752-k512-frozen-en_only-alpha1"
+    "ahmedselhady/XSDPO-Nemotron-1.5B-500x5-lr3e-6-kl0.001-full-ref10752-k512-frozen-en_only-alpha1"
+    "ahmedselhady/XSDPO-Nemotron-1.5B-750x5-lr3e-6-kl0.001-full-ref10752-k512-frozen-en_only-alpha1.0"
+    # "ahmedselhady/XSDPO-Nemotron-1.5B-500x5-lr3e-6-kl0.001-reasoning-ref10752-k512-gs-en_only"
 )
 
 task_count="${#EVAL_TASKS[@]}"
-# Run one task per model array and up to four model arrays per invocation.
+# Run one task at a time per array and up to two model arrays concurrently.
 array_range="0-$(( task_count - 1 ))%1"
 max_parallel_models=2
 cache_root="${HF_HOME:-/scratch/asalem/.cache/huggingface}/eval-arrays"

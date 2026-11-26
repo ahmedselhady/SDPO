@@ -4,7 +4,7 @@
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=32
 #SBATCH --gres=gpu:8
-#SBATCH --mem=200gb
+#SBATCH --mem=400gb
 #SBATCH --time=1-00:00:00
 #SBATCH --output=/scratch/asalem/repos/SDPO/.slurm/%x-%j.out
 #SBATCH --error=/scratch/asalem/repos/SDPO/.slurm/%x-%j.err
@@ -28,10 +28,21 @@ trap notify_failure ERR
 
 ROOT_DIR="/scratch/asalem/repos"
 SDPO_DIR="${SDPO_DIR:-$ROOT_DIR/SDPO}"
-# Each parallel group contains one example per language. A batch needs four groups.
+# Each parallel group contains one example per language.
 MAX_TRAIN_GROUPS="${MAX_TRAIN_GROUPS:-500}"
-if [[ ! "$MAX_TRAIN_GROUPS" =~ ^([4-9]|[1-9][0-9]+)$ ]]; then
-    printf '%s\n' 'ERROR: MAX_TRAIN_GROUPS must be an integer of at least 4.' >&2
+TRAIN_GROUPS_PER_BATCH="${TRAIN_GROUPS_PER_BATCH:-4}"
+ROLLOUTS_PER_PROMPT="${ROLLOUTS_PER_PROMPT:-8}"
+MAX_RESPONSE_TOKENS="${MAX_RESPONSE_TOKENS:-8192}"
+NNODES="${SDPO_NNODES:-1}"
+GPUS_PER_NODE=8
+for setting in MAX_TRAIN_GROUPS TRAIN_GROUPS_PER_BATCH ROLLOUTS_PER_PROMPT MAX_RESPONSE_TOKENS; do
+    if [[ ! "${!setting}" =~ ^[1-9][0-9]*$ ]]; then
+        printf 'ERROR: %s must be a positive integer.\n' "$setting" >&2
+        exit 1
+    fi
+done
+if (( MAX_TRAIN_GROUPS < TRAIN_GROUPS_PER_BATCH || ROLLOUTS_PER_PROMPT < 2 )); then
+    printf '%s\n' 'ERROR: The dataset must cover one full batch, and GRPO needs at least two rollouts per prompt.' >&2
     exit 1
 fi
 # Use comma-separated language codes.
@@ -54,15 +65,23 @@ for language in "${language_codes[@]}"; do
     seen_languages+="$language,"
 done
 
-# English reasoning references require an English prompt for each parallel group.
 reference_language="${SOLUTION_REFERENCE_LANGUAGE:-en_only}"
-if [[ "$reference_language" != en_only || "$seen_languages" != *,en,* ]]; then
-    printf '%s\n' 'ERROR: This recipe requires SOLUTION_REFERENCE_LANGUAGE=en_only and English in LANGUAGES.' >&2
+if [[ "$reference_language" != en_only && "$reference_language" != any ]]; then
+    printf '%s\n' 'ERROR: SOLUTION_REFERENCE_LANGUAGE must be en_only or any.' >&2
+    exit 1
+fi
+if [[ "$reference_language" == en_only && "$seen_languages" != *,en,* ]]; then
+    printf '%s\n' 'ERROR: SOLUTION_REFERENCE_LANGUAGE=en_only requires en in LANGUAGES.' >&2
     exit 1
 fi
 
-# Keep four complete parallel groups in each training batch.
-TRAIN_BATCH_SIZE=$((4 * ${#language_codes[@]}))
+TRAIN_BATCH_SIZE=$((TRAIN_GROUPS_PER_BATCH * ${#language_codes[@]}))
+ROLLOUT_BATCH_SIZE=$((TRAIN_BATCH_SIZE * ROLLOUTS_PER_PROMPT))
+TOTAL_GPUS=$((NNODES * GPUS_PER_NODE))
+if (( ROLLOUT_BATCH_SIZE % TOTAL_GPUS != 0 )); then
+    printf 'ERROR: %s rollout samples per batch must be divisible by %s GPUs.\n' "$ROLLOUT_BATCH_SIZE" "$TOTAL_GPUS" >&2
+    exit 1
+fi
 DATASET_TAG="${MAX_TRAIN_GROUPS}x${#language_codes[@]}"
 if [[ "$dataset_languages" != "$DEFAULT_LANGUAGES" ]]; then
     DATASET_TAG+="-${dataset_languages//,/-}"
@@ -73,7 +92,7 @@ CONTAINER_IMAGE="${SDPO_CONTAINER_IMAGE:-/scratch/asalem/SDPO-qwen35-vllm-0.19.1
 CONTAINER_ENV="${SDPO_CONTAINER_ENV:-/scratch/asalem/SDPO-qwen35-container-venv}"
 MODEL_PATH="${MODEL_PATH:-nvidia/Nemotron-Research-Reasoning-Qwen-1.5B}"
 TEACHER_PROMPT_TOKENS=10752
-SDPO_ALPHA="${SDPO_ALPHA:-0.5}"
+SDPO_ALPHA="${SDPO_ALPHA:-1}"
 if [[ ! "$SDPO_ALPHA" =~ ^(0(\.[0-9]+)?|1(\.0+)?)$ ]]; then
     printf 'ERROR: SDPO_ALPHA must be a decimal between 0 and 1.\n' >&2
     exit 1
@@ -93,9 +112,26 @@ case "${USE_KL_LOSS,,}" in
         exit 1
         ;;
 esac
-EXPERIMENT="${EXPERIMENT:-macereason-math-${DATASET_TAG}-nemotron-1.5b-8gpu-lr${LEARNING_RATE}-${kl_tag}-full-ref${TEACHER_PROMPT_TOKENS}-k512-frozen}"
+GRPO_ON_SUCCESS="${GRPO_ON_SUCCESS:-False}"
+case "${GRPO_ON_SUCCESS,,}" in
+    true) grpo_success_tag="-gs" ;;
+    false) grpo_success_tag="" ;;
+    *)
+        printf 'ERROR: GRPO_ON_SUCCESS must be True or False.\n' >&2
+        exit 1
+        ;;
+esac
+batch_tag=""
+model_tag="nemotron-1.5b"
+if (( NNODES != 1 || TRAIN_GROUPS_PER_BATCH != 4 || ROLLOUTS_PER_PROMPT != 8 || MAX_RESPONSE_TOKENS != 8192 )); then
+    batch_tag="-groups${TRAIN_GROUPS_PER_BATCH}-n${ROLLOUTS_PER_PROMPT}-resp${MAX_RESPONSE_TOKENS}"
+    if [[ "$MODEL_PATH" != nvidia/Nemotron-Research-Reasoning-Qwen-1.5B ]]; then
+        model_tag="${MODEL_PATH##*/}"
+    fi
+fi
+EXPERIMENT="${EXPERIMENT:-macereason-math-${DATASET_TAG}-${model_tag}-${TOTAL_GPUS}gpu${batch_tag}-lr${LEARNING_RATE}-${kl_tag}-full-ref${TEACHER_PROMPT_TOKENS}-k512-frozen}"
 CACHE_DIR="${CACHE_DIR:-/scratch/asalem/.cache/huggingface}"
-CHECKPOINT_DIR="${CHECKPOINT_DIR:-$SDPO_DIR/checkpoints/$EXPERIMENT-$reference_language${alpha_tag}}"
+CHECKPOINT_DIR="${CHECKPOINT_DIR:-$SDPO_DIR/checkpoints/$EXPERIMENT-$reference_language${alpha_tag}${grpo_success_tag}}"
 ROLLOUT_DATA_DIR="${ROLLOUT_DATA_DIR:-$CHECKPOINT_DIR/rollouts}"
 LOG_TEACHER_PROMPTS="${LOG_TEACHER_PROMPTS:-3}"
 
@@ -172,7 +208,74 @@ mkdir -p "$DATA_DIR" "$CHECKPOINT_DIR" "$HF_HOME" "$HF_DATASETS_CACHE"
 "$NOTIFY" "🚀 $TAG Experiment: $EXPERIMENT" || true
 "$NOTIFY" "🚀 $TAG Checkpoint directory: $CHECKPOINT_DIR" || true
 
+ray_steps=()
+stop_sdpo_ray_cluster() {
+    local step
+    for step in "${ray_steps[@]}"; do
+        kill "$step" 2>/dev/null || true
+    done
+    for step in "${ray_steps[@]}"; do
+        wait "$step" 2>/dev/null || true
+    done
+    ray_steps=()
+}
+
+ray_init_overrides=(
+    "ray_kwargs.ray_init.num_cpus=$RAY_NUM_CPUS"
+    "+ray_kwargs.ray_init.object_store_memory=$RAY_OBJECT_STORE_MEMORY"
+)
+if (( NNODES > 1 )); then
+    trap stop_sdpo_ray_cluster EXIT
+    ray_head_ip=$("${python_cmd[@]}" -c 'from ray.util import get_node_ip_address; print(get_node_ip_address())')
+    ray_port=$((20000 + SLURM_JOB_ID % 20000))
+    ray_address="$ray_head_ip:$ray_port"
+    export RAY_ADDRESS="$ray_address"
+    ray_step=(srun --overlap --nodes=1 --ntasks=1 --cpus-per-task="$RAY_NUM_CPUS" --gres="gpu:$GPUS_PER_NODE")
+    ray_start=("${python_cmd[@]}" -m ray.scripts.scripts start --block
+        --num-cpus="$RAY_NUM_CPUS" --num-gpus="$GPUS_PER_NODE" --object-store-memory="$RAY_OBJECT_STORE_MEMORY")
+    "${ray_step[@]}" --nodelist="$SLURMD_NODENAME" "${ray_start[@]}" \
+        --head --node-ip-address="$ray_head_ip" --port="$ray_port" --include-dashboard=false &
+    ray_steps+=("$!")
+    timeout 120 "${python_cmd[@]}" - "$ray_head_ip" "$ray_port" <<'PY'
+import socket
+import sys
+import time
+
+while True:
+    try:
+        with socket.create_connection((sys.argv[1], int(sys.argv[2])), timeout=1):
+            break
+    except OSError:
+        time.sleep(1)
+PY
+    node_list=$(scontrol show hostnames "$SLURM_JOB_NODELIST")
+    while IFS= read -r node; do
+        [[ "$node" != "$SLURMD_NODENAME" ]] || continue
+        "${ray_step[@]}" --nodelist="$node" "${ray_start[@]}" --address="$ray_address" &
+        ray_steps+=("$!")
+    done <<< "$node_list"
+    timeout 180 "${python_cmd[@]}" - "$ray_address" "$NNODES" "$GPUS_PER_NODE" <<'PY'
+import sys
+import time
+
+import ray
+
+ray.init(address=sys.argv[1])
+nodes_expected, gpus_per_node = map(int, sys.argv[2:])
+while True:
+    gpu_nodes = [node for node in ray.nodes() if node["Alive"] and node["Resources"].get("GPU") == gpus_per_node]
+    if len(gpu_nodes) == nodes_expected:
+        print(f"Ray ready with {nodes_expected} nodes and {nodes_expected * gpus_per_node} GPUs", flush=True)
+        break
+    time.sleep(2)
+ray.shutdown()
+PY
+    ray_init_overrides=("+ray_kwargs.ray_init.address=$ray_address")
+fi
+
 "$NOTIFY" "Launching verl.trainer.main_ppo; live training progress follows" || true
+printf 'Training batch: %s groups, %s prompts, %s rollouts per prompt, %s response tokens, %s GPUs\n' \
+    "$TRAIN_GROUPS_PER_BATCH" "$TRAIN_BATCH_SIZE" "$ROLLOUTS_PER_PROMPT" "$MAX_RESPONSE_TOKENS" "$TOTAL_GPUS"
 printf 'Actor learning rate=%s reference KL enabled=%s coefficient=%s\n' "$LEARNING_RATE" "$USE_KL_LOSS" "$KL_LOSS_COEF"
 printf 'SDPO alpha=%s\n' "$SDPO_ALPHA"
 printf 'Training rollout dumps: %s\n' "$ROLLOUT_DATA_DIR"
@@ -184,16 +287,18 @@ training_status=0
     "data.train_files=[$DATA_DIR/train.parquet]" \
     "data.val_files=[$DATA_DIR/test.parquet]" \
     "data.train_batch_size=$TRAIN_BATCH_SIZE" \
+    "data.max_response_length=$MAX_RESPONSE_TOKENS" \
     "data.dataloader_num_workers=$DATALOADER_NUM_WORKERS" \
     "data.parallel_group_batching.enabled=True" \
     "data.parallel_group_batching.group_key=parallel_id" \
     "actor_rollout_ref.model.path=$MODEL_PATH" \
     "+actor_rollout_ref.model.override_config.attn_implementation=sdpa" \
     "actor_rollout_ref.model.use_remove_padding=False" \
+    "actor_rollout_ref.model.enable_activation_offload=${ENABLE_ACTIVATION_OFFLOAD:-True}" \
     "actor_rollout_ref.actor.fsdp_config.use_meta_init=False" \
     "actor_rollout_ref.ref.fsdp_config.use_meta_init=False" \
     "actor_rollout_ref.rollout.tensor_model_parallel_size=1" \
-    "actor_rollout_ref.rollout.n=8" \
+    "actor_rollout_ref.rollout.n=$ROLLOUTS_PER_PROMPT" \
     "actor_rollout_ref.actor.ppo_mini_batch_size=$TRAIN_BATCH_SIZE" \
     "actor_rollout_ref.actor.optim.lr=$LEARNING_RATE" \
     "actor_rollout_ref.actor.use_kl_loss=$USE_KL_LOSS" \
@@ -205,7 +310,7 @@ training_status=0
     "actor_rollout_ref.actor.self_distillation.alpha=$SDPO_ALPHA" \
     "actor_rollout_ref.actor.self_distillation.distillation_topk=512" \
     "actor_rollout_ref.actor.self_distillation.distillation_add_tail=True" \
-    "actor_rollout_ref.actor.self_distillation.grpo_on_success=False" \
+    "actor_rollout_ref.actor.self_distillation.grpo_on_success=$GRPO_ON_SUCCESS" \
     "actor_rollout_ref.actor.self_distillation.teacher_update_rate=0.0" \
     "actor_rollout_ref.actor.self_distillation.max_reprompt_len=$TEACHER_PROMPT_TOKENS" \
     "actor_rollout_ref.actor.self_distillation.solution_reference_language=$reference_language" \
@@ -213,8 +318,8 @@ training_status=0
     "trainer.project_name=SDPO-multilingual" \
     "trainer.group_name=macereason-math-$MAX_TRAIN_GROUPS" \
     "trainer.experiment_name=$EXPERIMENT${alpha_tag}" \
-    "trainer.nnodes=1" \
-    "trainer.n_gpus_per_node=8" \
+    "trainer.nnodes=$NNODES" \
+    "trainer.n_gpus_per_node=$GPUS_PER_NODE" \
     "trainer.total_epochs=1" \
     "trainer.save_freq=50" \
     "trainer.test_freq=50" \
@@ -223,8 +328,10 @@ training_status=0
     "trainer.default_local_dir=$CHECKPOINT_DIR" \
     "trainer.rollout_data_dir=$ROLLOUT_DATA_DIR" \
     "trainer.max_actor_ckpt_to_keep=null" \
-    "ray_kwargs.ray_init.num_cpus=$RAY_NUM_CPUS" \
-    "+ray_kwargs.ray_init.object_store_memory=$RAY_OBJECT_STORE_MEMORY" || training_status=$?
+    "${ray_init_overrides[@]}" || training_status=$?
+if (( NNODES > 1 )); then
+    stop_sdpo_ray_cluster
+fi
 
 printf '[checkpoint upload] Trainer exited with status %s. Checking %s\n' "$training_status" "$CHECKPOINT_DIR"
 exporter="$SDPO_DIR/scripts/hyperion/eval/export_checkpoint_to_hub.sh"

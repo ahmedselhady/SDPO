@@ -43,12 +43,25 @@ TEACHER_PROMPT_TOKENS=10752
 # Use vanilla policy loss with GRPO advantages for the paired baseline.
 POLICY_LOSS_MODE="${POLICY_LOSS_MODE:-sdpo}"
 case "$POLICY_LOSS_MODE" in
-    sdpo) experiment_suffix="-full-ref${TEACHER_PROMPT_TOKENS}-gs" ;;
-    vanilla) experiment_suffix="-grpo" ;;
+    sdpo)
+        experiment_suffix="-full-ref${TEACHER_PROMPT_TOKENS}"
+        dataset_suffix="${experiment_suffix}-gs"
+        GRPO_ON_SUCCESS="${GRPO_ON_SUCCESS:-True}"
+        ;;
+    vanilla)
+        experiment_suffix="-grpo"
+        dataset_suffix="$experiment_suffix"
+        GRPO_ON_SUCCESS=False
+        ;;
     *) fail "POLICY_LOSS_MODE must be sdpo or vanilla." ;;
 esac
-DATA_DIR="${DATA_DIR:-$SDPO_DIR/datasets/mAceReason-Math-en-es-10$experiment_suffix}"
-EXPERIMENT="${EXPERIMENT:-macereason-math-en-es-10-nemotron-1.5b$experiment_suffix}"
+case "${GRPO_ON_SUCCESS,,}" in
+    true) grpo_success_tag="-gs" ;;
+    false) grpo_success_tag="" ;;
+    *) fail "GRPO_ON_SUCCESS must be True or False." ;;
+esac
+DATA_DIR="${DATA_DIR:-$SDPO_DIR/datasets/mAceReason-Math-en-es-10$dataset_suffix}"
+EXPERIMENT="${EXPERIMENT:-macereason-math-en-es-10-nemotron-1.5b$experiment_suffix}${grpo_success_tag}"
 CACHE_DIR="${CACHE_DIR:-/scratch/asalem/.cache/huggingface}"
 CHECKPOINT_DIR="${CHECKPOINT_DIR:-$SDPO_DIR/checkpoints/$EXPERIMENT}"
 
@@ -138,7 +151,7 @@ mkdir -p "$DATA_DIR" "$CHECKPOINT_DIR" "$HF_HOME" "$HF_DATASETS_CACHE"
     "actor_rollout_ref.actor.ppo_mini_batch_size=2" \
     "actor_rollout_ref.actor.policy_loss.loss_mode=$POLICY_LOSS_MODE" \
     "actor_rollout_ref.actor.self_distillation.remove_thinking_from_demonstration=False" \
-    "actor_rollout_ref.actor.self_distillation.grpo_on_success=True" \
+    "actor_rollout_ref.actor.self_distillation.grpo_on_success=$GRPO_ON_SUCCESS" \
     "actor_rollout_ref.actor.self_distillation.max_reprompt_len=$TEACHER_PROMPT_TOKENS" \
     "actor_rollout_ref.actor.self_distillation.solution_reference_language=en_only" \
     "actor_rollout_ref.actor.self_distillation.log_teacher_prompts=${LOG_TEACHER_PROMPTS:-3}" \

@@ -1,0 +1,149 @@
+{
+  "results": {
+    "macereason_math_fr": {
+      "name": "macereason_math_fr",
+      "alias": "macereason_math_fr",
+      "sample_len": 190,
+      "exact_match,none": 0.3736842105263158,
+      "exact_match_stderr,none": 0.03518990966860908,
+      "math_verify,none": 0.3631578947368421,
+      "math_verify_stderr,none": 0.034981040838332006
+    }
+  },
+  "group_subtasks": {},
+  "configs": {
+    "macereason_math_fr": {
+      "task": "macereason_math_fr",
+      "dataset_path": "ahmedselhady/mAceReason-Math",
+      "dataset_name": "fr",
+      "training_split": "train",
+      "test_split": "test",
+      "fewshot_split": "train",
+      "process_docs": "def process_docs(dataset: datasets.Dataset) -> datasets.Dataset:\n    language = dataset.info.config_name\n\n    def _process_doc(doc: dict) -> dict:\n        solution = doc[\"solution\"]\n        boxed_answer = last_boxed_only_string(solution)\n        answer = doc.get(\"answer\")\n        if boxed_answer is not None:\n            answer = remove_boxed(boxed_answer)\n        elif not answer:\n            match = re.search(r\"(?:final\\s+answer|answer)\\s*:\\s*(.+)\", solution, re.IGNORECASE)\n            answer = match.group(1).strip() if match else solution\n\n        answer_text = str(answer or \"\").strip().strip(\"$\").strip()\n        return {\n            \"language\": language,\n            \"answer_text\": answer_text,\n            \"answer\": normalize_final_answer(answer_text),\n        }\n\n    return dataset.map(_process_doc)\n",
+      "doc_to_text": "def doc_to_text(doc: dict) -> str:\n    return f\"{PROMPTS[doc['language']]['instruction']}\\n\\n{doc['problem']}\"\n",
+      "doc_to_target": "def doc_to_target(doc: dict) -> str:\n    return r\"\\boxed{\" + doc[\"answer_text\"] + \"}\"\n",
+      "unsafe_code": false,
+      "process_results": "def process_results(doc: dict, results: list[str]) -> dict[str, int]:\n    candidates = results[0]\n\n    final_box = last_boxed_only_string(candidates)\n    unnormalized_answer = remove_boxed(final_box) if final_box else get_unnormalized_answer(candidates)\n    answer = normalize_final_answer(unnormalized_answer)\n\n    if is_equiv(answer, doc[\"answer\"]):\n        retval = 1\n    else:\n        retval = 0\n\n    # math_verify\n    _mvres = verify(\n        gold=parse(doc[\"solution\"]),\n        target=parse(final_box or candidates),\n    )\n    mathval = 1 if _mvres else 0\n\n    res = {\n        \"exact_match\": retval,\n        \"math_verify\": mathval,\n    }\n    return res\n",
+      "description": "",
+      "target_delimiter": " ",
+      "fewshot_delimiter": "\n\n",
+      "fewshot_config": {
+        "sampler": "first_n",
+        "split": "train",
+        "process_docs": "<function process_fewshot_docs at 0x145b41f91d00>",
+        "fewshot_indices": null,
+        "samples": null,
+        "doc_to_text": "<function doc_to_text at 0x145b41f91b20>",
+        "doc_to_choice": null,
+        "doc_to_target": "<function doc_to_target at 0x145b41f91bc0>",
+        "gen_prefix": null,
+        "fewshot_delimiter": "\n\n",
+        "target_delimiter": " "
+      },
+      "num_fewshot": 5,
+      "metric_list": [
+        {
+          "metric": "exact_match",
+          "aggregation": "mean",
+          "higher_is_better": true
+        },
+        {
+          "metric": "math_verify",
+          "aggregation": "mean",
+          "higher_is_better": true
+        }
+      ],
+      "output_type": "generate_until",
+      "generation_kwargs": {
+        "until": [],
+        "do_sample": false,
+        "temperature": 0.0,
+        "max_gen_toks": 2048
+      },
+      "repeats": 1,
+      "should_decontaminate": false,
+      "metadata": {
+        "version": 2.0,
+        "pretrained": "ahmedselhady/XSDPO-Nemotron-1.5B-500x5-lr3e-6-kl0.001-full-ref10752-k512-frozen-en_only-alpha1",
+        "dtype": "bfloat16",
+        "trust_remote_code": true,
+        "parallelize": true,
+        "config_source": "/scratch/asalem/repos/lm-evaluation-harness/lm_eval/tasks/macereason_math/macereason_math_fr.yaml"
+      }
+    }
+  },
+  "versions": {
+    "macereason_math_fr": 2.0
+  },
+  "n-shot": {
+    "macereason_math_fr": 5
+  },
+  "higher_is_better": {
+    "macereason_math_fr": {
+      "exact_match": true,
+      "math_verify": true
+    }
+  },
+  "n-samples": {
+    "macereason_math_fr": {
+      "original": 190,
+      "effective": 190
+    }
+  },
+  "config": {
+    "model": "hf",
+    "model_args": {
+      "pretrained": "ahmedselhady/XSDPO-Nemotron-1.5B-500x5-lr3e-6-kl0.001-full-ref10752-k512-frozen-en_only-alpha1",
+      "dtype": "bfloat16",
+      "trust_remote_code": true,
+      "parallelize": true
+    },
+    "model_num_parameters": 1777088000,
+    "model_dtype": "torch.bfloat16",
+    "model_revision": "main",
+    "model_sha": "c3e90082cf8d8e307e1d0e62e7b02b8f1ffe2b3b",
+    "batch_size": "auto",
+    "batch_sizes": [],
+    "device": "cuda:0",
+    "use_cache": null,
+    "limit": null,
+    "bootstrap_iters": 100000,
+    "gen_kwargs": {},
+    "random_seed": 0,
+    "numpy_seed": 1234,
+    "torch_seed": 1234,
+    "fewshot_seed": 1234
+  },
+  "git_hash": "9f4f3171",
+  "date": 1795643924.2576983,
+  "pretty_env_info": "PyTorch version: 2.13.0+cu130\nIs debug build: False\nCUDA used to build PyTorch: 13.0\nROCM used to build PyTorch: N/A\n\nOS: Rocky Linux 8.10 (Green Obsidian) (x86_64)\nGCC version: (GCC) 8.5.0 20210514 (Red Hat 8.5.0-22)\nClang version: Could not collect\nCMake version: Could not collect\nLibc version: glibc-2.28\n\nPython version: 3.12.16 (main, Nov 11 2026, 00:15:59) [Clang 23.1.3 ] (64-bit runtime)\nPython platform: Linux-4.18.0-553.146.1.el8_10.x86_64-x86_64-with-glibc2.28\nIs CUDA available: True\nCUDA runtime version: 12.8.61\nCUDA_MODULE_LOADING set to: \nGPU models and configuration: GPU 0: NVIDIA A100-SXM4-80GB\nNvidia driver version: Could not collect\ncuDNN version: Could not collect\nIs XPU available: False\nHIP runtime version: N/A\nMIOpen runtime version: N/A\nIs XNNPACK available: False\nCaching allocator config: N/A\n\nCPU:\nArchitecture:        x86_64\nCPU op-mode(s):      32-bit, 64-bit\nByte Order:          Little Endian\nCPU(s):              64\nOn-line CPU(s) list: 0-63\nThread(s) per core:  1\nCore(s) per socket:  32\nSocket(s):           2\nNUMA node(s):        2\nVendor ID:           AuthenticAMD\nCPU family:          25\nModel:               1\nModel name:          AMD EPYC 75F3 32-Core Processor\nStepping:            1\nCPU MHz:             2950.000\nCPU max MHz:         4041.8450\nCPU min MHz:         1500.0000\nBogoMIPS:            5899.83\nVirtualization:      AMD-V\nL1d cache:           32K\nL1i cache:           32K\nL2 cache:            512K\nL3 cache:            32768K\nNUMA node0 CPU(s):   0-31\nNUMA node1 CPU(s):   32-63\nFlags:               fpu vme de pse tsc msr pae mce cx8 apic sep mtrr pge mca cmov pat pse36 clflush mmx fxsr sse sse2 ht syscall nx mmxext fxsr_opt pdpe1gb rdtscp lm constant_tsc rep_good nopl nonstop_tsc cpuid extd_apicid aperfmperf pni pclmulqdq monitor ssse3 fma cx16 pcid sse4_1 sse4_2 movbe popcnt aes xsave avx f16c rdrand lahf_lm cmp_legacy svm extapic cr8_legacy abm sse4a misalignsse 3dnowprefetch osvw ibs skinit wdt tce topoext perfctr_core perfctr_nb bpext perfctr_llc mwaitx cpb cat_l3 cdp_l3 invpcid_single hw_pstate ssbd mba ibrs ibpb stibp vmmcall fsgsbase bmi1 avx2 smep bmi2 erms invpcid cqm rdt_a rdseed adx smap clflushopt clwb sha_ni xsaveopt xsavec xgetbv1 xsaves cqm_llc cqm_occup_llc cqm_mbm_total cqm_mbm_local clzero irperf xsaveerptr wbnoinvd amd_ppin brs arat npt lbrv svm_lock nrip_save tsc_scale vmcb_clean flushbyasid decodeassists pausefilter pfthreshold v_vmsave_vmload vgif v_spec_ctrl umip pku ospke vaes vpclmulqdq rdpid overflow_recov succor smca fsrm\n\nVersions of relevant libraries:\n[pip3] Could not collect\n[conda] Could not collect",
+  "transformers_version": "5.5.4",
+  "lm_eval_version": "0.4.14.dev0",
+  "upper_git_hash": null,
+  "tokenizer_pad_token": [
+    "<｜end▁of▁sentence｜>",
+    "151643"
+  ],
+  "tokenizer_eos_token": [
+    "<｜end▁of▁sentence｜>",
+    "151643"
+  ],
+  "tokenizer_bos_token": [
+    "<｜begin▁of▁sentence｜>",
+    "151646"
+  ],
+  "eot_token_id": 151643,
+  "max_length": 131072,
+  "task_hashes": {
+    "macereason_math_fr": "e1779225744bba6e56fd25a631007e4c090e5567062f8d0a0a5b9fa3479fff22"
+  },
+  "model_source": "hf",
+  "model_name": "ahmedselhady/XSDPO-Nemotron-1.5B-500x5-lr3e-6-kl0.001-full-ref10752-k512-frozen-en_only-alpha1",
+  "model_name_sanitized": "ahmedselhady__XSDPO-Nemotron-1.5B-500x5-lr3e-6-kl0.001-full-ref10752-k512-frozen-en_only-alpha1",
+  "system_instruction": null,
+  "system_instruction_sha": null,
+  "fewshot_as_multiturn": true,
+  "chat_template": "{% if not add_generation_prompt is defined %}{% set add_generation_prompt = false %}{% endif %}{% set ns = namespace(is_first=false, is_tool=false, is_output_first=true, system_prompt='') %}{%- for message in messages %}{%- if message['role'] == 'system' %}{% set ns.system_prompt = message['content'] %}{%- endif %}{%- endfor %}{{bos_token}}{{ns.system_prompt}}{%- for message in messages %}{%- if message['role'] == 'user' %}{%- set ns.is_tool = false -%}{{'<｜User｜>' + message['content']}}{%- endif %}{%- if message['role'] == 'assistant' and message['content'] is none %}{%- set ns.is_tool = false -%}{%- for tool in message['tool_calls']%}{%- if not ns.is_first %}{{'<｜Assistant｜><｜tool▁calls▁begin｜><｜tool▁call▁begin｜>' + tool['type'] + '<｜tool▁sep｜>' + tool['function']['name'] + '\\n' + '```json' + '\\n' + tool['function']['arguments'] + '\\n' + '```' + '<｜tool▁call▁end｜>'}}{%- set ns.is_first = true -%}{%- else %}{{'\\n' + '<｜tool▁call▁begin｜>' + tool['type'] + '<｜tool▁sep｜>' + tool['function']['name'] + '\\n' + '```json' + '\\n' + tool['function']['arguments'] + '\\n' + '```' + '<｜tool▁call▁end｜>'}}{{'<｜tool▁calls▁end｜><｜end▁of▁sentence｜>'}}{%- endif %}{%- endfor %}{%- endif %}{%- if message['role'] == 'assistant' and message['content'] is not none %}{%- if ns.is_tool %}{{'<｜tool▁outputs▁end｜>' + message['content'] + '<｜end▁of▁sentence｜>'}}{%- set ns.is_tool = false -%}{%- else %}{% set content = message['content'] %}{% if '</think>' in content %}{% set content = content.split('</think>')[-1] %}{% endif %}{{'<｜Assistant｜>' + content + '<｜end▁of▁sentence｜>'}}{%- endif %}{%- endif %}{%- if message['role'] == 'tool' %}{%- set ns.is_tool = true -%}{%- if ns.is_output_first %}{{'<｜tool▁outputs▁begin｜><｜tool▁output▁begin｜>' + message['content'] + '<｜tool▁output▁end｜>'}}{%- set ns.is_output_first = false %}{%- else %}{{'\\n<｜tool▁output▁begin｜>' + message['content'] + '<｜tool▁output▁end｜>'}}{%- endif %}{%- endif %}{%- endfor -%}{% if ns.is_tool %}{{'<｜tool▁outputs▁end｜>'}}{% endif %}{% if add_generation_prompt and not ns.is_tool %}{{'<｜Assistant｜><think>\\n'}}{% endif %}",
+  "chat_template_sha": "56a1447ad31926fdc21fb07e56e5642bd9c850c4f52d8c8af7bbe5f079a84f5f",
+  "total_evaluation_time_seconds": "5108.462835362181"
+}
